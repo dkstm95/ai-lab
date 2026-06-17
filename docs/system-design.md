@@ -16,8 +16,8 @@ packages/
   model-providers/
   agent-runtime/
   workspace/
+  wiki/
   local-tools/
-ideas/
 docs/
 ```
 
@@ -27,8 +27,9 @@ docs/
 - `packages/config`: environment, workspace root, provider profile, and model routing config. It depends on `protocol`.
 - `packages/model-providers`: provider adapters and routing. It supports API, external runner, manual, and fake provider kinds. The initial implementation uses only deterministic fake providers.
 - `packages/agent-runtime`: agent execution flow. It calls model providers and local tools, then returns normalized run results. It does not know CLI, HTTP, MCP, or provider transport details.
-- `packages/workspace`: local workspace behavior such as `ideas/` management, slug creation, markdown/json file access, and path resolution.
-- `packages/local-tools`: tools callable by the agent runtime, such as echo and idea tools. It does not own the agent loop.
+- `packages/workspace`: local workspace behavior such as root selection, slug creation, and path-oriented helpers.
+- `packages/wiki`: agent-internal local markdown LLM Wiki behavior such as wiki layout, source registration, ingest/query/evolve packets, reusable answer filing, page metadata, index/log files, and deterministic linting. It does not call model providers, own the agent loop, or expose human-facing CLI flows.
+- `packages/local-tools`: tools callable by the agent runtime, such as echo and wiki tools. It does not own the agent loop.
 - `apps/cli`: human terminal entrypoint.
 - `apps/service`: local Hono HTTP entrypoint.
 
@@ -39,9 +40,10 @@ These packages are intentionally small but not temporary. They represent stable 
 ```text
 apps/* -> agent-runtime, workspace, protocol
 agent-runtime -> protocol, model-providers, local-tools
-local-tools -> protocol, workspace
+local-tools -> protocol, workspace, wiki
+wiki -> workspace
 model-providers -> protocol, config
-workspace -> protocol, config
+workspace -> no internal deps
 config -> protocol
 protocol -> no internal deps
 ```
@@ -69,9 +71,9 @@ The default test suite uses fake providers only. Subscription-based tools must n
 
 ## Later Additions
 
-- Add `packages/wiki` when markdown knowledge base, bidirectional links, retrieval, or LLM-maintained wiki behavior is concrete.
+- Extend `packages/wiki` with bidirectional links, retrieval, LLM task packets, and self-evolution memory pages as behavior becomes concrete.
 - Add `packages/mcp` when agent runtime, local tools, or workspace capabilities need to be exposed to external agents.
-- Add `packages/evals` or `evals/` when the same validation logic repeats across multiple ideas or agent runs.
+- Add `packages/evals` or `evals/` when the same validation logic repeats across multiple wiki or agent runs.
 
 ## References
 

@@ -6,6 +6,6 @@
     "outDir": "dist"
   },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../protocol" }, { "path": "../workspace" }, { "path": "../wiki" }],
+  "references": [{ "path": "../workspace" }],
   "exclude": ["dist"]
 }

@@ -11,7 +11,6 @@
 - `docs/development-guide.md`: 설치, 실행, 검증, Git hook 기준
 - `docs/testing-guide.md`: 테스트 작성과 리뷰 기준
 - `docs/contribution-guide.md`: Spring Framework를 참고한 commit, PR, review 기준
-- `ideas/`: 아이디어 링크, 요약, 구현 계획, 실험 메모
 
 ## 작업 기준
 

@@ -12,8 +12,6 @@ English guide: `README.md`
 pnpm install
 pnpm check
 pnpm cli --help
-pnpm cli idea add "LLM Wiki" --source "https://example.com"
-pnpm cli idea list
 pnpm cli run hello "hello"
 pnpm coverage
 ```
@@ -27,7 +25,6 @@ pnpm service:dev
 기본 endpoint:
 
 - `GET /health`
-- `GET /ideas`
 - `POST /agent/hello`
 
 ## 구조
@@ -39,21 +36,17 @@ packages/protocol        패키지 간 통신 규약과 schema
 packages/config          환경 설정과 모델 profile 설정
 packages/model-providers provider adapter와 routing
 packages/agent-runtime   모델/tool 실행 흐름
-packages/workspace       ideas/files 작업공간
+packages/workspace       workspace root와 path helper
+packages/wiki            local markdown LLM Wiki workspace
 packages/local-tools     agent runtime이 호출할 수 있는 local tool
-ideas/                   아이디어 메모와 구현 계획
 docs/                    설계, 개발, 테스트 가이드
 ```
 
-## 아이디어 추가 흐름
+## LLM Wiki 흐름
 
-아이디어는 markdown 문서로 기록한다.
+LLM Wiki는 agent 내부 기능이다. Agent는 `packages/local-tools`를 통해 source 등록, ingest/query/evolve task packet 생성, 재사용 답변 파일링, 검증된 wiki update 적용, lint, run 기록을 수행한다. 사람이 직접 쓰는 wiki CLI는 두지 않는다.
 
-```bash
-pnpm cli idea add "My AI idea" --source "https://example.com" --notes "First notes"
-```
-
-반복 사용할 코드는 `packages/*`에 둔다. 사람이 실행하는 흐름은 `apps/cli` 또는 `apps/service`에서 노출한다. provider SDK나 외부 runner 세부사항은 `packages/model-providers` 안에 격리한다.
+반복 사용할 코드는 `packages/*`에 둔다. 사람이 직접 실행해야 하는 흐름만 `apps/cli` 또는 `apps/service`에서 노출한다. provider SDK나 외부 runner 세부사항은 `packages/model-providers` 안에 격리한다.
 
 ## 검증
 

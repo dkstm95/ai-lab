@@ -1,8 +1,8 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createIdea, createWorkspace, listIdeas, slugify } from "../src/index.js";
+import { createDefaultWorkspace, createWorkspace, slugify } from "../src/index.js";
 
 const roots: string[] = [];
 
@@ -18,14 +18,10 @@ async function tempWorkspace() {
 }
 
 describe("workspace", () => {
-  it("creates and lists idea documents", async () => {
+  it("creates explicit workspaces", async () => {
     const workspace = await tempWorkspace();
-    await createIdea(workspace, { title: "LLM Wiki", source: "https://example.com" });
 
-    const ideas = await listIdeas(workspace);
-
-    expect(ideas).toHaveLength(1);
-    expect(ideas[0]?.metadata.title).toBe("LLM Wiki");
+    expect(workspace.root).toContain("ai-lab-");
   });
 
   it("creates stable slugs", () => {
@@ -36,23 +32,9 @@ describe("workspace", () => {
     expect(slugify("!!!")).toBe("untitled");
   });
 
-  it("does not overwrite an existing idea with the same slug", async () => {
-    const workspace = await tempWorkspace();
-    await createIdea(workspace, { title: "Duplicate Idea", notes: "first" });
+  it("creates a default workspace from the current directory", () => {
+    const workspace = createDefaultWorkspace();
 
-    await expect(
-      createIdea(workspace, { title: "Duplicate Idea", notes: "second" }),
-    ).rejects.toThrow("Idea already exists:");
-
-    const ideas = await listIdeas(workspace);
-    expect(ideas[0]?.content).toContain("first");
-    expect(ideas[0]?.content).not.toContain("second");
-  });
-
-  it("rethrows non-duplicate write failures", async () => {
-    const workspace = await tempWorkspace();
-    await writeFile(join(workspace.root, "ideas"), "not a directory", "utf8");
-
-    await expect(createIdea(workspace, { title: "Broken" })).rejects.toThrow();
+    expect(workspace.root).toBe(process.cwd());
   });
 });

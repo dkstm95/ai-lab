@@ -13,9 +13,5 @@
     "build": "tsup src/index.ts --format esm --dts",
     "test": "vitest run test",
     "typecheck": "tsc -b"
-  },
-  "dependencies": {
-    "@ai-lab/config": "workspace:*",
-    "@ai-lab/protocol": "workspace:*"
   }
 }

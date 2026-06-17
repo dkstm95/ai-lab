@@ -101,6 +101,9 @@ importers:
       '@ai-lab/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@ai-lab/wiki':
+        specifier: workspace:*
+        version: link:../wiki
       '@ai-lab/workspace':
         specifier: workspace:*
         version: link:../workspace
@@ -120,14 +123,13 @@ importers:
         specifier: ^4.0.0
         version: 4.4.3
 
-  packages/workspace:
+  packages/wiki:
     dependencies:
-      '@ai-lab/config':
+      '@ai-lab/workspace':
         specifier: workspace:*
-        version: link:../config
-      '@ai-lab/protocol':
-        specifier: workspace:*
-        version: link:../protocol
+        version: link:../workspace
+
+  packages/workspace: {}
 
 packages:
 
