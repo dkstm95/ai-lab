@@ -5,6 +5,7 @@
     { "path": "packages/config" },
     { "path": "packages/model-providers" },
     { "path": "packages/workspace" },
+    { "path": "packages/wiki" },
     { "path": "packages/local-tools" },
     { "path": "packages/agent-runtime" },
     { "path": "apps/cli" },

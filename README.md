@@ -12,8 +12,6 @@ The project starts with a small runnable monorepo: a CLI, a local HTTP service, 
 pnpm install
 pnpm check
 pnpm cli --help
-pnpm cli idea add "LLM Wiki" --source "https://example.com"
-pnpm cli idea list
 pnpm cli run hello "hello"
 pnpm coverage
 ```
@@ -27,7 +25,6 @@ pnpm service:dev
 Endpoints:
 
 - `GET /health`
-- `GET /ideas`
 - `POST /agent/hello`
 
 ## Structure
@@ -39,21 +36,17 @@ packages/protocol        schemas and package communication protocol
 packages/config          environment and model profile config
 packages/model-providers provider adapters and routing
 packages/agent-runtime   model/tool execution flow
-packages/workspace       local ideas/files workspace
+packages/workspace       local workspace root and path helpers
+packages/wiki            local markdown LLM Wiki workspace
 packages/local-tools     tools callable by the agent runtime
-ideas/                   idea notes and implementation plans
 docs/                    system, development, and testing guides
 ```
 
-## Working With Ideas
+## Working With LLM Wiki
 
-Add ideas as markdown documents:
+LLM Wiki is agent-internal. Agents use `packages/local-tools` to register sources, prepare ingest/query/evolve task packets, file reusable answers, apply validated wiki updates, lint the wiki, and record runs. There is no human-facing wiki CLI.
 
-```bash
-pnpm cli idea add "My AI idea" --source "https://example.com" --notes "First notes"
-```
-
-Implement reusable code in `packages/*`, expose human-facing flows from `apps/cli` or `apps/service`, and keep provider-specific SDK details inside `packages/model-providers`.
+Implement reusable code in `packages/*`, expose human-facing flows from `apps/cli` or `apps/service` only when they are meant for people, and keep provider-specific SDK details inside `packages/model-providers`.
 
 ## Docs
 

@@ -63,11 +63,3 @@ export const agentRunResultSchema = z.object({
   tools: z.array(toolResultSchema).default([]),
 });
 export type AgentRunResult = z.infer<typeof agentRunResultSchema>;
-
-export const ideaDocumentMetadataSchema = z.object({
-  title: z.string().min(1),
-  slug: z.string().min(1),
-  source: z.string().optional(),
-  createdAt: z.string().datetime(),
-});
-export type IdeaDocumentMetadata = z.infer<typeof ideaDocumentMetadataSchema>;

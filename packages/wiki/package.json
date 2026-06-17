@@ -1,5 +1,5 @@
 {
-  "name": "@ai-lab/local-tools",
+  "name": "@ai-lab/wiki",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -15,8 +15,6 @@
     "typecheck": "tsc -b"
   },
   "dependencies": {
-    "@ai-lab/protocol": "workspace:*",
-    "@ai-lab/wiki": "workspace:*",
     "@ai-lab/workspace": "workspace:*"
   }
 }

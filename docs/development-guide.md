@@ -15,8 +15,6 @@ pnpm install
 
 ```bash
 pnpm cli --help
-pnpm cli idea add "New idea"
-pnpm cli idea list
 pnpm cli run hello "hello"
 pnpm service:dev
 pnpm test

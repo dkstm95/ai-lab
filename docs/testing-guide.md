@@ -8,8 +8,9 @@ Tests protect package contracts and runnable lab flows. They must not call real 
 - `config`: default config and provider profile selection without secrets.
 - `model-providers`: deterministic fake provider and task routing.
 - `agent-runtime`: model and tool orchestration.
-- `workspace`: idea file creation, listing, and slug behavior.
-- `local-tools`: tool input handling and workspace integration.
+- `workspace`: workspace creation and slug behavior.
+- `wiki`: markdown wiki layout, source registration, page metadata parsing, and lint findings.
+- `local-tools`: tool input handling, workspace integration, and wiki tool contracts.
 - `apps/cli`: command behavior through package APIs.
 - `apps/service`: HTTP status and JSON contracts.
 

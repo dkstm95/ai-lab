@@ -51,8 +51,6 @@ assert("coverage" in docs.packageJson.scripts, "Missing root package script: cov
 
 for (const command of [
   "pnpm cli --help",
-  "pnpm cli idea add",
-  "pnpm cli idea list",
   "pnpm cli run hello",
   "pnpm service:dev",
   "pnpm test",
@@ -77,6 +75,7 @@ for (const packageName of [
   "model-providers",
   "agent-runtime",
   "workspace",
+  "wiki",
   "local-tools",
 ]) {
   assert(

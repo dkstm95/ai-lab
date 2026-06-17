@@ -1,10 +1,5 @@
 import { createDefaultAgentRuntime } from "@ai-lab/agent-runtime";
-import {
-  type Workspace,
-  createDefaultWorkspace,
-  createWorkspace,
-  listIdeas,
-} from "@ai-lab/workspace";
+import { createDefaultWorkspace, createWorkspace } from "@ai-lab/workspace";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 
@@ -14,20 +9,13 @@ export function createApp(root?: string): Hono {
   const runtime = createDefaultAgentRuntime();
 
   registerHealthRoute(app);
-  registerIdeaRoutes(app, workspace);
+  void workspace;
   registerAgentRoutes(app, runtime);
   return app;
 }
 
 function registerHealthRoute(app: Hono): void {
   app.get("/health", (context) => context.json({ status: "ok" }));
-}
-
-function registerIdeaRoutes(app: Hono, workspace: Workspace): void {
-  app.get("/ideas", async (context) => {
-    const ideas = await listIdeas(workspace);
-    return context.json({ ideas: ideas.map((idea) => idea.metadata) });
-  });
 }
 
 function registerAgentRoutes(

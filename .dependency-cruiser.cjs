@@ -18,6 +18,12 @@ module.exports = {
       name: "workspace-does-not-know-agent-or-tools",
       severity: "error",
       from: { path: "^packages/workspace/src" },
+      to: { path: "^packages/(agent-runtime|local-tools|model-providers|wiki)/src" },
+    },
+    {
+      name: "wiki-does-not-know-agent-or-providers",
+      severity: "error",
+      from: { path: "^packages/wiki/src" },
       to: { path: "^packages/(agent-runtime|local-tools|model-providers)/src" },
     },
     {

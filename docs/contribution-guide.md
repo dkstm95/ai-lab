@@ -16,7 +16,7 @@ Good subjects:
 
 ```text
 Add fake provider routing
-Reject invalid idea titles
+Reject invalid wiki pages
 Document contribution workflow
 ```
 
