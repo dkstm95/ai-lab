@@ -10,6 +10,7 @@
 - `docs/system-design.md`: monorepo 구조, 패키지 책임, 의존 방향, provider 방식
 - `docs/development-guide.md`: 설치, 실행, 검증, Git hook 기준
 - `docs/testing-guide.md`: 테스트 작성과 리뷰 기준
+- `docs/contribution-guide.md`: Spring Framework를 참고한 commit, PR, review 기준
 - `ideas/`: 아이디어 링크, 요약, 구현 계획, 실험 메모
 
 ## 작업 기준
@@ -17,6 +18,7 @@
 - 코드 변경 후 관련 문서가 최신인지 확인한다.
 - 실행과 검증 기준은 `docs/development-guide.md`를 따른다.
 - 테스트 작성 기준은 `docs/testing-guide.md`를 따른다.
+- 커밋, PR, 리뷰 기준은 `docs/contribution-guide.md`를 따른다.
 - 패키지 책임과 의존 방향은 `docs/system-design.md`를 따른다.
 - 새 명령, 패키지, 문서 지도가 바뀌면 `pnpm docs:check`가 통과하도록 관련 문서를 함께 갱신한다.
 - Markdown은 짧고 직관적으로 쓴다. 같은 설명을 여러 문서에 반복하지 말고, 자세한 기준은 해당 주제 문서에만 둔다.

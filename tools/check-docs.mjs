@@ -8,6 +8,7 @@ const requiredFiles = [
   "docs/system-design.md",
   "docs/development-guide.md",
   "docs/testing-guide.md",
+  "docs/contribution-guide.md",
   "package.json",
 ];
 
@@ -34,6 +35,7 @@ const docs = {
   systemDesign: read("docs/system-design.md"),
   development: read("docs/development-guide.md"),
   testing: read("docs/testing-guide.md"),
+  contribution: read("docs/contribution-guide.md"),
   packageJson: JSON.parse(read("package.json")),
 };
 
@@ -112,6 +114,7 @@ for (const file of [
   "docs/system-design.md",
   "docs/development-guide.md",
   "docs/testing-guide.md",
+  "docs/contribution-guide.md",
 ]) {
   assert(docs.agents.includes(file), `AGENTS.md must include ${file} in the document map`);
 }
@@ -122,6 +125,13 @@ assert(
 );
 assert(docs.testing.includes("pnpm docs:check"), "testing-guide.md must mention docs check");
 assert(docs.testing.includes("pnpm coverage"), "testing-guide.md must document pnpm coverage");
+assert(
+  docs.development.includes("docs/contribution-guide.md"),
+  "development-guide.md must point to contribution-guide.md",
+);
+for (const phrase of ["Spring Framework", "55 characters", "Pull Request Rules"]) {
+  assert(docs.contribution.includes(phrase), `contribution-guide.md must include: ${phrase}`);
+}
 assert(docs.readme.includes("README.ko.md"), "README.md must link README.ko.md");
 assert(docs.readmeKo.includes("README.md"), "README.ko.md must link README.md");
 

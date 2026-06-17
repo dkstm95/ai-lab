@@ -56,6 +56,8 @@ git config core.hooksPath .githooks
 
 Both pre-commit and pre-push hooks run `scripts/verify.sh`.
 
+Commit and pull request rules are in `docs/contribution-guide.md`.
+
 ## References
 
 - pnpm workspaces: https://pnpm.io/workspaces
