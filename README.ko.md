@@ -70,4 +70,5 @@ pnpm check
 - `docs/system-design.md`
 - `docs/development-guide.md`
 - `docs/testing-guide.md`
+- `docs/contribution-guide.md`
 - `AGENTS.md`
