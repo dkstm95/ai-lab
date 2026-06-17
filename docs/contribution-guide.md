@@ -34,6 +34,7 @@ Validation: pnpm check
 ## Pull Request Rules
 
 - State the purpose in one or two sentences.
+- Use a plain title without tool or author prefixes such as `[codex]`.
 - List user-visible or architecture-level changes.
 - Include validation commands and their result.
 - Mention documentation updates or say none were needed.
