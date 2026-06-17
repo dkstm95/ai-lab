@@ -1,0 +1,22 @@
+{
+  "name": "@ai-lab/agent-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts",
+    "test": "vitest run test",
+    "typecheck": "tsc -b"
+  },
+  "dependencies": {
+    "@ai-lab/local-tools": "workspace:*",
+    "@ai-lab/model-providers": "workspace:*",
+    "@ai-lab/protocol": "workspace:*"
+  }
+}

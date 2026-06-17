@@ -1,0 +1,13 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/protocol" },
+    { "path": "packages/config" },
+    { "path": "packages/model-providers" },
+    { "path": "packages/workspace" },
+    { "path": "packages/local-tools" },
+    { "path": "packages/agent-runtime" },
+    { "path": "apps/cli" },
+    { "path": "apps/service" }
+  ]
+}

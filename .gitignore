@@ -1,0 +1,17 @@
+node_modules/
+dist/
+*.tsbuildinfo
+coverage/
+.turbo/
+.pnpm-store/
+.gradle/
+.env
+.env.*
+!.env.example
+build/
+out/
+data/
+runs/
+.idea/
+*.iml
+.DS_Store
