@@ -71,6 +71,8 @@ describe("wiki", () => {
     expect(packet.task).toBe("ingest");
     expect(packet.contextFiles).toContain(`raw/sources/${source.id}.md`);
     expect(packet.prompt).toContain("Read schema.md first");
+    expect(packet.prompt).toContain("Preserve source coverage before compression");
+    expect(packet.prompt).toContain("reusable knowledge beyond a one-off summary");
     expect(packet.expectedFiles).toContain(`pages/sources/${source.id}.md`);
     expect(packet.expectedFiles).toContain("pages/entities/*.md");
     expect(packet.constraints).toContain("Preserve raw sources as immutable evidence.");

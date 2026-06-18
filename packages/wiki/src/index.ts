@@ -312,7 +312,8 @@ function ingestPrompt(sourceId: string): string {
   return [
     `Ingest source ${sourceId} into the LLM Wiki.`,
     "Read schema.md first, then index.md, then the raw source.",
-    "Create or update source, concept, entity, and synthesis pages as needed.",
+    "Preserve source coverage before compression: keep distinct operating models, practices, risks, and tradeoffs as separate source-backed claims.",
+    "Create or update source, concept, entity, and synthesis pages when the source contains reusable knowledge beyond a one-off summary.",
     "Flag contradictions with conflicted pages instead of overwriting silently.",
     "Update index.md and append log.md in the same update.",
   ].join("\n");
@@ -970,7 +971,7 @@ function schemaPageRules(): string {
 function schemaWorkflowRules(): string {
   return [
     "## Ingest",
-    "Read schema.md, index.md, then one raw source. Create or update source, concept, entity, and synthesis pages. Mark contradictions as conflicted instead of overwriting silently. Update index.md and log.md.",
+    "Read schema.md, index.md, then one raw source. Preserve source coverage before compression by keeping distinct operating models, practices, risks, and tradeoffs as separate source-backed claims. Create or update source, concept, entity, and synthesis pages when the source contains reusable knowledge beyond a one-off summary. Mark contradictions as conflicted instead of overwriting silently. Update index.md and log.md.",
     "## Query",
     "Read index.md first, then relevant pages. Answer with citations to wiki pages or raw sources. File reusable answers as question or synthesis pages.",
     "## Evolve",
