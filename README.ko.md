@@ -64,4 +64,5 @@ pnpm check
 - `docs/development-guide.md`
 - `docs/testing-guide.md`
 - `docs/contribution-guide.md`
+- `docs/self-evolution-guide.md`
 - `AGENTS.md`
