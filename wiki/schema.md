@@ -18,7 +18,7 @@ The LLM agent maintains this wiki. Humans curate sources, ask questions, and rev
 
 ## Ingest
 
-Read schema.md, index.md, then one raw source. Create or update source, concept, entity, and synthesis pages. Mark contradictions as conflicted instead of overwriting silently. Update index.md and log.md.
+Read schema.md, index.md, then one raw source. Preserve source coverage before compression by keeping distinct operating models, practices, risks, and tradeoffs as separate source-backed claims. Create or update source, concept, entity, and synthesis pages when the source contains reusable knowledge beyond a one-off summary. Mark contradictions as conflicted instead of overwriting silently. Update index.md and log.md.
 
 ## Query
 
