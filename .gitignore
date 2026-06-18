@@ -12,6 +12,9 @@ build/
 out/
 data/
 runs/
+!wiki/raw/runs/
+wiki/raw/runs/*
+!wiki/raw/runs/.gitkeep
 .idea/
 *.iml
 .DS_Store
