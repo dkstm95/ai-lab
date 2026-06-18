@@ -71,7 +71,7 @@ The default test suite uses fake providers only. Subscription-based tools must n
 
 ## Later Additions
 
-- Extend `packages/wiki` with bidirectional links, retrieval, LLM task packets, and self-evolution memory pages as behavior becomes concrete.
+- Extend `packages/wiki` with bidirectional links, retrieval, reflection task packets, and approved self-evolution memory pages as behavior becomes concrete.
 - Add `packages/mcp` when agent runtime, local tools, or workspace capabilities need to be exposed to external agents.
 - Add `packages/evals` or `evals/` when the same validation logic repeats across multiple wiki or agent runs.
 
