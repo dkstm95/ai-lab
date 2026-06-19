@@ -4,7 +4,8 @@ slug: principal-ic-operating-model
 kind: concept
 status: active
 createdAt: 2026-06-18T10:38:36.000Z
-updatedAt: 2026-06-18T12:00:00.000Z
+updatedAt: 2026-06-19T01:00:00.000Z
+reviewAfter: 2026-12-19T00:00:00.000Z
 sources:
   - raw/sources/advice-for-new-principal-tech-ics.md
   - raw/sources/advice-for-new-principal-tech-ics-fuller-notes.md

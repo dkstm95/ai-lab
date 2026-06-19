@@ -44,7 +44,7 @@ docs/                    system, development, and testing guides
 
 ## Working With LLM Wiki
 
-LLM Wiki is maintained through agent-internal tools, but approved wiki pages are human-readable knowledge. Agents use `packages/local-tools` to register sources, prepare ingest/query/evolve task packets, file reusable answers, apply validated wiki updates, lint the wiki, and record runs. There is no human-facing wiki CLI.
+LLM Wiki is maintained through agent-internal tools, but approved wiki pages are human-readable knowledge. Agents use `packages/local-tools` to register sources, prepare ingest/query/evolve task packets, file reusable answers, apply validated wiki updates, lint the wiki, and record runs. Wiki lint checks source-backed claims, index drift, review gates, stale review dates, and duplicate accepted claim/source pairs. There is no human-facing wiki CLI.
 
 Implement reusable code in `packages/*`, expose human-facing flows from `apps/cli` or `apps/service` only when they are meant for people, and keep provider-specific SDK details inside `packages/model-providers`.
 

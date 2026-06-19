@@ -14,11 +14,12 @@ The LLM agent maintains this wiki. Humans curate sources, ask questions, and rev
 - Use YAML frontmatter with title, slug, kind, status, createdAt, updatedAt, and sources.
 - Use typed claims: accepted, hypothesis, or conflicted.
 - Every accepted claim must include a following source line.
+- Keep each accepted claim distinct; do not duplicate the same claim/source pair across pages.
 - Prefer wiki links like [[concept-slug]] for reusable concepts.
 
 ## Ingest
 
-Read schema.md, index.md, then one raw source. Preserve source coverage before compression by keeping distinct operating models, practices, risks, and tradeoffs as separate source-backed claims. Create or update source, concept, entity, and synthesis pages when the source contains reusable knowledge beyond a one-off summary. Mark contradictions as conflicted instead of overwriting silently. Update index.md and log.md.
+Read schema.md, index.md, then one raw source. Preserve source coverage before compression by keeping distinct operating models, practices, risks, and tradeoffs as separate source-backed claims. Create or update source, concept, entity, and synthesis pages when the source contains reusable knowledge beyond a one-off summary. Check existing claim/source pairs before writing to avoid semantic duplicates. Mark contradictions as conflicted instead of overwriting silently. Route ambiguous contradictions, stale updates, and user-owned interpretations to review instead of silently overwriting. Update index.md and log.md.
 
 ## Query
 
@@ -30,4 +31,4 @@ Manual or automated agents read lint issues, recent runs, and candidate pages, t
 
 ## Lint
 
-Check broken links, orphan pages, stale TODOs, unsupported sources, conflicted pages, duplicate slugs, and index drift.
+Check broken links, orphan pages, stale TODOs, unsupported sources, conflicted or review pages, duplicate slugs, duplicate accepted claims, stale active pages, and index drift.

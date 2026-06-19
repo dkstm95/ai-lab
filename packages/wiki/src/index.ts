@@ -16,7 +16,7 @@ export const wikiPageKinds = [
   "eval",
 ] as const;
 
-export const wikiPageStatuses = ["draft", "active", "superseded", "conflicted"] as const;
+export const wikiPageStatuses = ["draft", "active", "review", "superseded", "conflicted"] as const;
 
 export type WikiPageKind = (typeof wikiPageKinds)[number];
 export type WikiPageStatus = (typeof wikiPageStatuses)[number];
@@ -44,6 +44,7 @@ export interface WikiPageMetadata {
   readonly status: WikiPageStatus;
   readonly createdAt: string;
   readonly updatedAt: string;
+  readonly reviewAfter?: string;
   readonly sources: readonly string[];
 }
 
@@ -164,12 +165,15 @@ export async function readWikiPage(workspace: Workspace, slug: string): Promise<
   return page;
 }
 
-export async function lintWiki(workspace: Workspace): Promise<WikiLintReport> {
+export async function lintWiki(
+  workspace: Workspace,
+  now: Date = new Date(),
+): Promise<WikiLintReport> {
   const issues = await requiredIssues(workspace);
   if (issues.length > 0) {
     return { issues };
   }
-  return { issues: await contentIssues(workspace) };
+  return { issues: await contentIssues(workspace, now) };
 }
 
 export async function prepareWikiIngest(
@@ -679,15 +683,16 @@ function updateFile(path: string, content: string): WikiUpdateFile {
   return { path, content };
 }
 
-async function contentIssues(workspace: Workspace): Promise<WikiLintIssue[]> {
+async function contentIssues(workspace: Workspace, now: Date): Promise<WikiLintIssue[]> {
   const { pages, issues } = await readPageSet(workspace);
   const pageIssueGroups = await Promise.all(
-    pages.map((page) => pageIssues(workspace, page, pages)),
+    pages.map((page) => pageIssues(workspace, page, pages, now)),
   );
   return [
     ...issues,
     ...pageIssueGroups.flat(),
     ...duplicateSlugIssues(pages),
+    ...duplicateAcceptedClaimIssues(pages),
     ...(await indexIssues(workspace, pages)),
   ];
 }
@@ -718,12 +723,16 @@ async function pageIssues(
   workspace: Workspace,
   page: WikiPage,
   pages: readonly WikiPage[],
+  now: Date,
 ): Promise<WikiLintIssue[]> {
   return [
     ...brokenLinkIssues(page, pages),
     ...acceptedClaimIssues(page),
     ...staleTodoIssues(page),
     ...conflictedPageIssues(page),
+    ...reviewPageIssues(page),
+    ...invalidReviewAfterIssues(page),
+    ...staleReviewIssues(page, now),
     ...(await sourceReferenceIssues(workspace, page)),
     ...orphanPageIssues(page, pages),
   ];
@@ -764,6 +773,35 @@ function conflictedPageIssues(page: WikiPage): WikiLintIssue[] {
   return page.metadata.status === "conflicted"
     ? [issue("conflicted-page", page.path, "Wiki page has unresolved conflicts")]
     : [];
+}
+
+function reviewPageIssues(page: WikiPage): WikiLintIssue[] {
+  return page.metadata.status === "review"
+    ? [issue("review-page", page.path, "Wiki page is waiting for human review")]
+    : [];
+}
+
+function invalidReviewAfterIssues(page: WikiPage): WikiLintIssue[] {
+  const reviewAfter = page.metadata.reviewAfter;
+  return reviewAfter !== undefined && reviewAfterTime(reviewAfter) === undefined
+    ? [issue("invalid-review-after", page.path, `Invalid reviewAfter date: ${reviewAfter}`)]
+    : [];
+}
+
+function staleReviewIssues(page: WikiPage, now: Date): WikiLintIssue[] {
+  const reviewAfter = page.metadata.reviewAfter;
+  if (page.metadata.status !== "active" || reviewAfter === undefined) {
+    return [];
+  }
+  const time = reviewAfterTime(reviewAfter);
+  return time !== undefined && time < now.getTime()
+    ? [issue("stale-review", page.path, `Wiki page passed reviewAfter: ${reviewAfter}`)]
+    : [];
+}
+
+function reviewAfterTime(reviewAfter: string): number | undefined {
+  const time = Date.parse(reviewAfter);
+  return Number.isNaN(time) ? undefined : time;
 }
 
 async function sourceReferenceIssues(
@@ -824,6 +862,46 @@ function duplicateSlugIssues(pages: readonly WikiPage[]): WikiLintIssue[] {
   );
 }
 
+function duplicateAcceptedClaimIssues(pages: readonly WikiPage[]): WikiLintIssue[] {
+  const records = pages.flatMap(acceptedClaimRecords);
+  return records.flatMap((record, index) =>
+    records.findIndex((candidate) => candidate.identity === record.identity) === index
+      ? []
+      : [
+          issue(
+            "duplicate-accepted-claim",
+            record.path,
+            `Duplicate accepted claim/source pair: ${record.source}`,
+          ),
+        ],
+  );
+}
+
+interface AcceptedClaimRecord {
+  readonly path: string;
+  readonly identity: string;
+  readonly source: string;
+}
+
+function acceptedClaimRecords(page: WikiPage): AcceptedClaimRecord[] {
+  return page.content.split("\n").flatMap((line, index, lines) => {
+    const claim = acceptedClaimText(line);
+    const source = acceptedClaimSource(lines[index + 1] ?? "")[0];
+    return claim === undefined || source === undefined
+      ? []
+      : [{ path: page.path, identity: `${source}\n${normalizeClaim(claim)}`, source }];
+  });
+}
+
+function acceptedClaimText(line: string): string | undefined {
+  const match = line.match(/^\s*-\s+accepted:\s*(.+)$/);
+  return match?.[1];
+}
+
+function normalizeClaim(claim: string): string {
+  return claim.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
 async function indexIssues(
   workspace: Workspace,
   pages: readonly WikiPage[],
@@ -872,7 +950,8 @@ function frontmatter(content: string): string {
 
 function parseMetadata(markdown: string): WikiPageMetadata {
   const map = frontmatterMap(markdown);
-  return {
+  const reviewAfter = optional(map, "reviewAfter");
+  const metadata = {
     title: required(map, "title"),
     slug: required(map, "slug"),
     kind: parseKind(required(map, "kind")),
@@ -881,6 +960,7 @@ function parseMetadata(markdown: string): WikiPageMetadata {
     updatedAt: required(map, "updatedAt"),
     sources: parseSources(markdown),
   };
+  return reviewAfter === undefined ? metadata : { ...metadata, reviewAfter };
 }
 
 function frontmatterMap(markdown: string): Map<string, string> {
@@ -904,7 +984,9 @@ function sourceLine(line: string): string[] {
 }
 
 function renderFrontmatter(metadata: WikiPageMetadata): string {
-  return `title: ${metadata.title}\nslug: ${metadata.slug}\nkind: ${metadata.kind}\nstatus: ${metadata.status}\ncreatedAt: ${metadata.createdAt}\nupdatedAt: ${metadata.updatedAt}\nsources:\n${metadata.sources.map((source) => `  - ${source}`).join("\n")}\n`;
+  const reviewAfter =
+    metadata.reviewAfter === undefined ? "" : `reviewAfter: ${metadata.reviewAfter}\n`;
+  return `title: ${metadata.title}\nslug: ${metadata.slug}\nkind: ${metadata.kind}\nstatus: ${metadata.status}\ncreatedAt: ${metadata.createdAt}\nupdatedAt: ${metadata.updatedAt}\n${reviewAfter}sources:\n${metadata.sources.map((source) => `  - ${source}`).join("\n")}\n`;
 }
 
 function parseKind(value: string): WikiPageKind {
@@ -927,6 +1009,11 @@ function required(map: Map<string, string>, key: string): string {
     throw new Error(`Missing frontmatter field: ${key}`);
   }
   return value;
+}
+
+function optional(map: Map<string, string>, key: string): string | undefined {
+  const value = map.get(key);
+  return value === undefined || value.length === 0 ? undefined : value;
 }
 
 function invalidFrontmatterIssue(path: string, error: unknown): WikiLintIssue {
@@ -964,6 +1051,7 @@ function schemaPageRules(): string {
     "- Use YAML frontmatter with title, slug, kind, status, createdAt, updatedAt, and sources.",
     "- Use typed claims: accepted, hypothesis, or conflicted.",
     "- Every accepted claim must include a following source line.",
+    "- Keep each accepted claim distinct; do not duplicate the same claim/source pair across pages.",
     "- Prefer wiki links like [[concept-slug]] for reusable concepts.",
   ].join("\n");
 }
@@ -971,13 +1059,13 @@ function schemaPageRules(): string {
 function schemaWorkflowRules(): string {
   return [
     "## Ingest",
-    "Read schema.md, index.md, then one raw source. Preserve source coverage before compression by keeping distinct operating models, practices, risks, and tradeoffs as separate source-backed claims. Create or update source, concept, entity, and synthesis pages when the source contains reusable knowledge beyond a one-off summary. Mark contradictions as conflicted instead of overwriting silently. Update index.md and log.md.",
+    "Read schema.md, index.md, then one raw source. Preserve source coverage before compression by keeping distinct operating models, practices, risks, and tradeoffs as separate source-backed claims. Create or update source, concept, entity, and synthesis pages when the source contains reusable knowledge beyond a one-off summary. Check existing claim/source pairs before writing to avoid semantic duplicates. Mark contradictions as conflicted instead of overwriting silently. Route ambiguous contradictions, stale updates, and user-owned interpretations to review instead of silently overwriting. Update index.md and log.md.",
     "## Query",
     "Read index.md first, then relevant pages. Answer with citations to wiki pages or raw sources. File reusable answers as question or synthesis pages.",
     "## Evolve",
     "Manual or automated agents read lint issues, recent runs, and candidate pages, then apply small source-backed improvements through validated updates.",
     "## Lint",
-    "Check broken links, orphan pages, stale TODOs, unsupported sources, conflicted pages, duplicate slugs, and index drift.",
+    "Check broken links, orphan pages, stale TODOs, unsupported sources, conflicted or review pages, duplicate slugs, duplicate accepted claims, stale active pages, and index drift.",
   ].join("\n\n");
 }
 

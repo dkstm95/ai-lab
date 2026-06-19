@@ -20,6 +20,7 @@
 - 실행과 검증 기준은 `docs/development-guide.md`를 따른다.
 - 테스트 작성 기준은 `docs/testing-guide.md`를 따른다.
 - 커밋, PR, 리뷰 기준은 `docs/contribution-guide.md`를 따른다.
+- PR 제목에는 `[codex]` 같은 도구명, 작성자명, 자동화 prefix를 붙이지 않는다.
 - 작업 회고와 memory 반영은 `docs/self-evolution-guide.md`를 따른다.
 - 패키지 책임과 의존 방향은 `docs/system-design.md`를 따른다.
 - wiki에 글, 출처, 답변을 추가하는 요청은 먼저 `packages/wiki/src/index.ts`의 schema와 lint 규칙을 확인하고 `workspace.root/wiki` 구조에 맞춘다.
