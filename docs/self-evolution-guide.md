@@ -7,6 +7,7 @@ The agent records work, reflects on useful lessons, proposes durable memory, and
 
 - Remember user feedback that should change future behavior.
 - Convert repeated mistakes into short failure or playbook pages.
+- Keep saved knowledge useful for both agent retrieval and human follow-up questions.
 - Keep durable memory reviewable as markdown and Git diffs.
 - Avoid storing secrets, personal data, or noisy transcripts.
 - Keep `AGENTS.md` small by promoting only high-value rules.
@@ -32,6 +33,16 @@ The agent records work, reflects on useful lessons, proposes durable memory, and
 - Prefer `playbook`, then `failure`, then `decision` pages for retrieval.
 - Exclude `superseded` and unrelated pages from task context.
 - Redact secrets, tokens, environment values, private data, and long command output.
+
+## Human Readability
+
+LLM Wiki pages are not only prompt context. Users may ask about previously saved knowledge directly, so durable pages should be useful as concise human-facing notes.
+
+- Prefer clear titles and summaries before detailed claims.
+- Keep source-backed claims explicit enough to answer follow-up questions.
+- Split dense source notes into reusable concept, synthesis, or playbook pages.
+- Avoid storing only agent-oriented diagnostics when a human would need the lesson later.
+- Keep raw run details local, but make approved shared memory readable without the raw transcript.
 
 ## Completion Loop
 
