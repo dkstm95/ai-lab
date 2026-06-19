@@ -28,7 +28,7 @@ docs/
 - `packages/model-providers`: provider adapters and routing. It supports API, external runner, manual, and fake provider kinds. The initial implementation uses only deterministic fake providers.
 - `packages/agent-runtime`: agent execution flow. It calls model providers and local tools, then returns normalized run results. It does not know CLI, HTTP, MCP, or provider transport details.
 - `packages/workspace`: local workspace behavior such as root selection, slug creation, and path-oriented helpers.
-- `packages/wiki`: agent-internal local markdown LLM Wiki behavior such as wiki layout, source registration, ingest/query/evolve packets, reusable answer filing, page metadata, index/log files, and deterministic linting. It does not call model providers, own the agent loop, or expose human-facing CLI flows.
+- `packages/wiki`: local markdown LLM Wiki behavior such as wiki layout, source registration, ingest/query/evolve packets, reusable answer filing, page metadata, index/log files, and deterministic linting. It is maintained through agent-internal tools, while approved pages remain human-readable. It does not call model providers, own the agent loop, or expose human-facing CLI flows.
 - `packages/local-tools`: tools callable by the agent runtime, such as echo and wiki tools. It does not own the agent loop.
 - `apps/cli`: human terminal entrypoint.
 - `apps/service`: local Hono HTTP entrypoint.
