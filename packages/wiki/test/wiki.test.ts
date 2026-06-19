@@ -122,6 +122,67 @@ describe("wiki", () => {
     expect(codes).toContain("unsupported-source");
   });
 
+  it("reports pages that need human review or stale review", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    await writeFile(pagePath(workspace.root), renderWikiPage(reviewMetadata(), goodBody()), "utf8");
+    await writeFile(
+      sourcePagePath(workspace.root),
+      renderWikiPage(staleMetadata(), sourceBackedBody("Different sourced claim.")),
+      "utf8",
+    );
+    await writeFile(
+      join(workspace.root, "wiki", "index.md"),
+      `${indexWithPage()}- [LLM Wiki Source](pages/sources/llm-wiki.md)\n`,
+      "utf8",
+    );
+
+    const report = await lintWiki(workspace, now());
+    const codes = report.issues.map((issue) => issue.code);
+
+    expect(codes).toContain("review-page");
+    expect(codes).toContain("stale-review");
+  });
+
+  it("reports invalid reviewAfter metadata", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    await writeFile(
+      pagePath(workspace.root),
+      renderWikiPage(invalidReviewAfterMetadata(), goodBody()),
+      "utf8",
+    );
+    await writeFile(join(workspace.root, "wiki", "index.md"), indexWithPage(), "utf8");
+
+    const report = await lintWiki(workspace, now());
+
+    expect(report.issues.map((issue) => issue.code)).toContain("invalid-review-after");
+    expect(report.issues.map((issue) => issue.code)).not.toContain("stale-review");
+  });
+
+  it("reports duplicate accepted claim and source pairs", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    await writeFile(pagePath(workspace.root), renderWikiPage(metadata(), goodBody()), "utf8");
+    await writeFile(
+      sourcePagePath(workspace.root),
+      renderWikiPage(sourceMetadata(), goodBody()),
+      "utf8",
+    );
+    await writeFile(
+      join(workspace.root, "wiki", "index.md"),
+      `${indexWithPage()}- [LLM Wiki Source](pages/sources/llm-wiki.md)\n`,
+      "utf8",
+    );
+
+    const report = await lintWiki(workspace);
+
+    expect(report.issues.map((issue) => issue.code)).toContain("duplicate-accepted-claim");
+  });
+
   it("reports invalid frontmatter with the failing file path", async () => {
     const workspace = await tempWorkspace();
     await initWiki(workspace);
@@ -347,6 +408,36 @@ function conflictedMetadata() {
   };
 }
 
+function reviewMetadata() {
+  return {
+    ...metadata(),
+    status: "review" as const,
+  };
+}
+
+function staleMetadata() {
+  return {
+    ...sourceMetadata(),
+    reviewAfter: "2026-06-16T12:00:00.000Z",
+  };
+}
+
+function invalidReviewAfterMetadata() {
+  return {
+    ...metadata(),
+    reviewAfter: "not-a-date",
+  };
+}
+
+function sourceMetadata() {
+  return {
+    ...metadata(),
+    title: "LLM Wiki Source",
+    slug: "llm-wiki-source",
+    kind: "source" as const,
+  };
+}
+
 function answerInput() {
   return {
     question: "How does LLM Wiki work?",
@@ -365,6 +456,10 @@ function badBody(): string {
 
 function goodBody(): string {
   return "## Summary\n\n[[llm-wiki]]\n\n## Key Claims\n\n- accepted: Has a source.\n  source: raw/sources/karpathy-llm-wiki.md\n";
+}
+
+function sourceBackedBody(claim: string): string {
+  return `## Summary\n\nA source-backed page.\n\n## Key Claims\n\n- accepted: ${claim}\n  source: raw/sources/karpathy-llm-wiki.md\n`;
 }
 
 function indexWithPage(): string {
