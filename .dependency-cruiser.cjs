@@ -27,6 +27,14 @@ module.exports = {
       to: { path: "^packages/(agent-runtime|local-tools|model-providers)/src" },
     },
     {
+      name: "subbrain-has-no-internal-deps",
+      severity: "error",
+      from: { path: "^packages/subbrain/src" },
+      to: {
+        path: "^(packages/(agent-runtime|config|local-tools|model-providers|protocol|wiki|workspace)|apps)/",
+      },
+    },
+    {
       name: "local-tools-does-not-know-agent",
       severity: "error",
       from: { path: "^packages/local-tools/src" },

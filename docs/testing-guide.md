@@ -10,6 +10,7 @@ Tests protect package contracts and runnable lab flows. They must not call real 
 - `agent-runtime`: model and tool orchestration.
 - `workspace`: workspace creation and slug behavior.
 - `wiki`: markdown wiki layout, source registration, page metadata parsing, and lint findings.
+- `subbrain`: SQLite memory storage, deterministic retrieval, context packets, replaceable provider ports, and fixture evaluation.
 - `local-tools`: tool input handling, workspace integration, and wiki tool contracts.
 - `apps/cli`: command behavior through package APIs.
 - `apps/service`: HTTP status and JSON contracts.

@@ -12,6 +12,7 @@
 - `docs/testing-guide.md`: 테스트 작성과 리뷰 기준
 - `docs/contribution-guide.md`: Spring Framework를 참고한 commit, PR, review 기준
 - `docs/self-evolution-guide.md`: 작업 회고, memory 후보, 승인 기반 자가진화 정책
+- `docs/subbrain-design.md`: 개인 맥락 기억 prototype의 목표, 비목표, 저장/검색/평가 기준
 - `packages/wiki/src/index.ts`: LLM Wiki 저장 구조, page schema, lint 규칙
 
 ## 작업 기준
