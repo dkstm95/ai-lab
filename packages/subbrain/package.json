@@ -1,0 +1,25 @@
+{
+  "name": "@ai-lab/subbrain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./fixtures": {
+      "types": "./src/fixtures.ts",
+      "import": "./src/fixtures.ts"
+    },
+    "./sqlite": {
+      "types": "./src/sqlite.ts",
+      "import": "./src/sqlite.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsup src/index.ts src/fixtures.ts src/sqlite.ts --format esm && tsc -p tsconfig.json --emitDeclarationOnly",
+    "test": "vitest run --root ../.. packages/subbrain/test",
+    "typecheck": "tsc -b"
+  }
+}
