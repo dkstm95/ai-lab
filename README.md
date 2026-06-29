@@ -26,6 +26,10 @@ Endpoints:
 
 - `GET /health`
 - `POST /agent/hello`
+- `GET /subbrain`
+
+`/subbrain` is a local prototype page. Its JSON routes are private demo helpers,
+not stable product APIs.
 
 ## Structure
 
@@ -38,6 +42,7 @@ packages/model-providers provider adapters and routing
 packages/agent-runtime   model/tool execution flow
 packages/workspace       local workspace root and path helpers
 packages/wiki            local markdown LLM Wiki workspace
+packages/subbrain        personal event memory prototype
 packages/local-tools     tools callable by the agent runtime
 docs/                    system, development, and testing guides
 ```
@@ -57,4 +62,5 @@ Implement reusable code in `packages/*`, expose human-facing flows from `apps/cl
 - `docs/testing-guide.md`
 - `docs/contribution-guide.md`
 - `docs/self-evolution-guide.md`
+- `docs/subbrain-design.md`
 - `AGENTS.md`

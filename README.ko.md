@@ -26,6 +26,10 @@ pnpm service:dev
 
 - `GET /health`
 - `POST /agent/hello`
+- `GET /subbrain`
+
+`/subbrain`은 로컬 prototype page다. 내부 JSON route는 데모 helper이며
+안정적인 product API가 아니다.
 
 ## 구조
 
@@ -38,6 +42,7 @@ packages/model-providers provider adapter와 routing
 packages/agent-runtime   모델/tool 실행 흐름
 packages/workspace       workspace root와 path helper
 packages/wiki            local markdown LLM Wiki workspace
+packages/subbrain        개인 사건 기억 prototype
 packages/local-tools     agent runtime이 호출할 수 있는 local tool
 docs/                    설계, 개발, 테스트 가이드
 ```
@@ -65,4 +70,5 @@ pnpm check
 - `docs/testing-guide.md`
 - `docs/contribution-guide.md`
 - `docs/self-evolution-guide.md`
+- `docs/subbrain-design.md`
 - `AGENTS.md`

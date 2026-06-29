@@ -1,7 +1,13 @@
+import { randomUUID } from "node:crypto";
+import { mkdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { createDefaultAgentRuntime } from "@ai-lab/agent-runtime";
+import { SubbrainEngine, SubbrainValidationError, seedFixture } from "@ai-lab/subbrain";
+import { motherCaseFixture, selfInsightFixture } from "@ai-lab/subbrain/fixtures";
+import { SqliteSubbrainStore } from "@ai-lab/subbrain/sqlite";
 import { createDefaultWorkspace, createWorkspace } from "@ai-lab/workspace";
 import { serve } from "@hono/node-server";
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 
 export function createApp(root?: string): Hono {
   const app = new Hono();
@@ -9,8 +15,8 @@ export function createApp(root?: string): Hono {
   const runtime = createDefaultAgentRuntime();
 
   registerHealthRoute(app);
-  void workspace;
   registerAgentRoutes(app, runtime);
+  registerSubbrainRoutes(app, workspace.root);
   return app;
 }
 
@@ -29,9 +35,209 @@ function registerAgentRoutes(
   });
 }
 
+function registerSubbrainRoutes(app: Hono, root: string): void {
+  app.get("/subbrain", (context) => context.html(subbrainPage()));
+  app.post("/subbrain/seed", async (context) => {
+    const body = await jsonBody<{ confirmReset?: boolean; fixture?: string }>(context);
+    if (body.confirmReset !== true) {
+      return badRequest(context, "seed requires confirmReset=true");
+    }
+    return subbrainJson(context, () => {
+      seedSubbrain(root, body.fixture ?? "mother-case");
+      return { status: "ok", fixture: body.fixture ?? "mother-case" };
+    });
+  });
+  app.post("/subbrain/ask", async (context) => {
+    const body = await jsonBody<{ question?: string; caseId?: string }>(context);
+    return subbrainJson(context, () => askSubbrain(root, body));
+  });
+  app.post("/subbrain/entries", async (context) => {
+    const body = await jsonBody<{ text?: string; recordedAt?: string }>(context);
+    return subbrainJson(context, () => addSubbrainEntry(root, body));
+  });
+  app.get("/subbrain/events", (context) => {
+    return context.json({ events: listSubbrainEvents(root) });
+  });
+}
+
+async function askSubbrain(root: string, body: { question?: string; caseId?: string }) {
+  const store = openSubbrainStore(root);
+  try {
+    const engine = new SubbrainEngine(store);
+    return engine.answer(await queryFromBody(engine, body));
+  } finally {
+    store.close();
+  }
+}
+
+function seedSubbrain(root: string, fixtureName: string): void {
+  resetSubbrainDb(root);
+  const store = openSubbrainStore(root);
+  try {
+    for (const fixture of selectedFixtures(fixtureName)) {
+      seedFixture(store, fixture);
+    }
+  } finally {
+    store.close();
+  }
+}
+
+async function addSubbrainEntry(root: string, body: { text?: string; recordedAt?: string }) {
+  const entry = rawEntryFromBody(body);
+  const store = openSubbrainStore(root);
+  try {
+    return await new SubbrainEngine(store).addEntry(entry);
+  } finally {
+    store.close();
+  }
+}
+
+function listSubbrainEvents(root: string) {
+  const store = openSubbrainStore(root);
+  try {
+    return store.listMemoryEvents();
+  } finally {
+    store.close();
+  }
+}
+
+function selectedFixtures(name: string) {
+  return name === "self-insight"
+    ? [selfInsightFixture]
+    : name === "all"
+      ? [motherCaseFixture, selfInsightFixture]
+      : [motherCaseFixture];
+}
+
+async function queryFromBody(engine: SubbrainEngine, body: { question?: string; caseId?: string }) {
+  const fixtureCase = [...motherCaseFixture.cases, ...selfInsightFixture.cases].find(
+    (candidate) => candidate.id === body.caseId,
+  );
+  return fixtureCase?.query ?? (await engine.inferQuery(body.question?.trim() ?? ""));
+}
+
+function rawEntryFromBody(body: { text?: string; recordedAt?: string }) {
+  const recordedAt = body.recordedAt ?? new Date().toISOString();
+  const text = body.text?.trim() ?? "";
+  if (text === "") {
+    throw new SubbrainValidationError("memory_event", [
+      { path: "entry.text", message: "Expected non-empty text." },
+    ]);
+  }
+  return {
+    id: `entry_${randomUUID()}`,
+    text,
+    recordedAt,
+  };
+}
+
+function resetSubbrainDb(root: string): void {
+  rmSync(subbrainDbPath(root), { force: true });
+}
+
+function openSubbrainStore(root: string): SqliteSubbrainStore {
+  mkdirSync(join(root, ".subbrain"), { recursive: true });
+  return new SqliteSubbrainStore(subbrainDbPath(root));
+}
+
+function subbrainDbPath(root: string): string {
+  return join(root, ".subbrain", "demo.sqlite");
+}
+
+async function jsonBody<T>(context: Context): Promise<T> {
+  return context.req.json<T>().catch(() => ({}) as T);
+}
+
+async function subbrainJson<T>(context: Context, run: () => Promise<T> | T) {
+  try {
+    return context.json(await run());
+  } catch (error) {
+    if (error instanceof SubbrainValidationError) {
+      return badRequest(context, error.message);
+    }
+    throw error;
+  }
+}
+
+function badRequest(context: Context, message: string) {
+  return context.json({ error: message }, 400);
+}
+
+function subbrainPage(): string {
+  return `<!doctype html>
+<html lang="ko">
+${subbrainHead()}
+${subbrainBody()}
+</html>`;
+}
+
+function subbrainHead(): string {
+  return `<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SubBrain Local Test</title>
+<style>${subbrainCss()}</style>
+</head>`;
+}
+
+function subbrainBody(): string {
+  return `<body>
+<main>
+${subbrainToolbar()}
+${subbrainEntryForm()}
+${subbrainQuery()}
+${subbrainResults()}
+</main>
+<script>${subbrainScript()}</script>
+</body>`;
+}
+
+function subbrainToolbar(): string {
+  return `<section class="toolbar"><h1>SubBrain</h1><div>
+<button data-seed="mother-case">어머니 사례</button>
+<button data-seed="self-insight">자기이해</button>
+<button data-seed="all">전체</button>
+</div></section>`;
+}
+
+function subbrainQuery(): string {
+  return `<section class="query">
+<textarea id="question">열무 가시에 찔린 뒤 왼쪽 검지가 하얘지고 감각이 둔한데 왜 그럴까?</textarea>
+<button id="ask">질문하기</button>
+</section>`;
+}
+
+function subbrainEntryForm(): string {
+  return `<section class="entry-form">
+<h2>원문 기록 추가</h2>
+<textarea id="entry-text">오늘 팀장과 1:1 후 또 방향이 바뀌어서 답답했다.</textarea>
+<button id="save-entry">기록 저장</button>
+</section>`;
+}
+
+function subbrainResults(): string {
+  return `<section class="status" id="status">어머니 사례 fixture를 불러온 뒤 질문하세요.</section>
+<section class="result-grid">
+<section><h2>가능한 연결 후보</h2><div id="candidates" class="list empty">아직 결과가 없습니다.</div></section>
+<section><h2>근거 기억</h2><div id="evidence" class="list empty">아직 결과가 없습니다.</div></section>
+<section><h2>불확실성</h2><div id="uncertainty" class="list empty">아직 결과가 없습니다.</div></section>
+<section><h2>다음 확인 질문</h2><div id="questions" class="list empty">아직 결과가 없습니다.</div></section>
+<section class="wide"><h2>저장된 기억</h2><div id="memories" class="list empty">아직 결과가 없습니다.</div></section>
+</section>`;
+}
+
+function subbrainCss(): string {
+  return "body{font:15px system-ui;margin:0;background:#f7f7f4;color:#222}main{max-width:1040px;margin:32px auto;padding:0 20px}.toolbar{display:flex;justify-content:space-between;gap:16px;align-items:center}h1{margin:0;font-size:28px}h2{font-size:15px;margin:0 0 10px}button{border:1px solid #222;background:#222;color:white;padding:9px 12px;border-radius:6px;cursor:pointer}button:hover{background:#444}textarea{width:100%;min-height:96px;margin:10px 0;padding:12px;font:inherit;border:1px solid #bbb;border-radius:6px;box-sizing:border-box}.entry-form,.query{margin-top:18px}.status{margin:16px 0;padding:10px 12px;border:1px solid #d6d0bd;background:#fffaf0;border-radius:6px}.result-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.result-grid>section,.entry-form{background:white;border:1px solid #ddd;border-radius:6px;padding:14px;min-height:180px}.wide{grid-column:1/-1}.item{border-top:1px solid #eee;padding:10px 0}.item:first-child{border-top:0}.meta{color:#666;font-size:13px;margin-top:5px}.badge{display:inline-block;background:#edf2ff;border:1px solid #cad6ff;border-radius:999px;padding:2px 7px;margin-left:6px;font-size:12px}.empty{color:#777}@media(max-width:760px){.toolbar{display:block}.toolbar div{margin-top:12px}.result-grid{grid-template-columns:1fr}}";
+}
+
+function subbrainScript(): string {
+  return "const examples={\"mother-case\":\"열무 가시에 찔린 뒤 왼쪽 검지가 하얘지고 감각이 둔한데 왜 그럴까?\",\"self-insight\":\"내가 왜 요즘 이직 생각을 자주 하지?\",all:\"내가 왜 요즘 이직 생각을 자주 하지?\"};const cases={\"mother-case\":\"finger-cause\",\"self-insight\":\"job-change-pattern\",all:\"job-change-pattern\"};let activeFixture='mother-case';const $=(id)=>document.querySelector(id);const status=$('#status');document.querySelectorAll('[data-seed]').forEach((button)=>button.onclick=async()=>{const fixture=button.dataset.seed;activeFixture=fixture;status.textContent='fixture를 불러오는 중입니다.';$('#question').value=examples[fixture];const response=await fetch('/subbrain/seed',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({fixture,confirmReset:true})});const body=await response.json();status.textContent=response.ok?`${body.fixture} fixture를 불러왔습니다.`:body.error;clearResults();await loadEvents()});$('#save-entry').onclick=async()=>{status.textContent='기록을 저장하는 중입니다.';const text=$('#entry-text').value;const response=await fetch('/subbrain/entries',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text})});const body=await response.json();status.textContent=response.ok?'원문 기록을 기억으로 저장했습니다.':body.error;await loadEvents()};$('#ask').onclick=async()=>{status.textContent='관련 기억을 찾는 중입니다.';const question=$('#question').value;const body=question===examples[activeFixture]?{question,caseId:cases[activeFixture]}:{question};const response=await fetch('/subbrain/ask',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});const data=await response.json();if(!response.ok){status.textContent=data.error;return}render(data)};async function loadEvents(){const response=await fetch('/subbrain/events');renderMemories((await response.json()).events)}function clearResults(){for(const id of ['#candidates','#evidence','#uncertainty','#questions']){$(id).className='list empty';$(id).textContent='질문하면 결과가 표시됩니다.'}}function render(data){status.textContent=data.answer.summary;renderCandidates(data.answer.causalCandidates);renderEvidence(data.answer.evidence,data.context.retrievedMemories);renderList('#uncertainty',data.answer.uncertainty);renderList('#questions',data.answer.suggestedQuestions);renderMemories(data.context.retrievedMemories.map((memory)=>memory.event))}function renderCandidates(items){$('#candidates').className='list';$('#candidates').innerHTML=items.map((item)=>`<div class=\"item\"><strong>${escapeHtml(item.label)}</strong><span class=\"badge\">${item.confidence}</span><div class=\"meta\">${item.eventId}</div><div class=\"meta\">${escapeHtml(item.rationale)}</div></div>`).join('')||'관련 후보가 없습니다.'}function renderEvidence(items,memories){$('#evidence').className='list';$('#evidence').innerHTML=items.map((item)=>{const memory=memories.find((candidate)=>candidate.event.id===item.eventId);const mark=memory?.forgotten?' <span class=\"badge\">잊고 있던 기억</span>':'';return `<div class=\"item\"><strong>${escapeHtml(item.summary)}</strong>${mark}<div class=\"meta\">${item.occurredAt} · ${item.eventId}</div><div class=\"meta\">${escapeHtml(item.reasons.join(', '))}</div></div>`}).join('')||'근거 기억이 없습니다.'}function renderMemories(items){$('#memories').className='list';$('#memories').innerHTML=items.map((item)=>`<div class=\"item\"><strong>${escapeHtml(item.summary)}</strong><div class=\"meta\">${item.occurredAt} · ${item.id}</div><div class=\"meta\">${escapeHtml(item.topics.join(', '))}</div></div>`).join('')||'저장된 기억이 없습니다.'}function renderList(id,items){$(id).className='list';$(id).innerHTML=items.map((item)=>`<div class=\"item\">${escapeHtml(item)}</div>`).join('')||'표시할 내용이 없습니다.'}function escapeHtml(value){return String(value).replace(/[&<>\"]/g,(char)=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[char]))}";
+}
+
 /* v8 ignore next 5 */
 if (import.meta.url === `file://${process.argv[1]}`) {
   const port = Number(process.env.AI_LAB_SERVICE_PORT ?? 3000);
-  serve({ fetch: createApp().fetch, port });
-  console.log(`ai-lab service listening on http://localhost:${port}`);
+  const hostname = process.env.AI_LAB_SERVICE_HOST ?? "127.0.0.1";
+  serve({ fetch: createApp().fetch, hostname, port });
+  console.log(`ai-lab service listening on http://${hostname}:${port}`);
 }

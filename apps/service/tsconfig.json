@@ -9,6 +9,7 @@
   "references": [
     { "path": "../../packages/protocol" },
     { "path": "../../packages/workspace" },
+    { "path": "../../packages/subbrain" },
     { "path": "../../packages/agent-runtime" }
   ],
   "exclude": ["dist"]
