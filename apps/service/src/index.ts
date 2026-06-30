@@ -218,6 +218,7 @@ function subbrainEntryForm(): string {
 function subbrainResults(): string {
   return `<section class="status" id="status">어머니 사례 fixture를 불러온 뒤 질문하세요.</section>
 <section class="result-grid">
+<section class="wide"><h2>판단 요약</h2><div id="decision" class="list empty">아직 결과가 없습니다.</div></section>
 <section><h2>가능한 연결 후보</h2><div id="candidates" class="list empty">아직 결과가 없습니다.</div></section>
 <section><h2>근거 기억</h2><div id="evidence" class="list empty">아직 결과가 없습니다.</div></section>
 <section><h2>불확실성</h2><div id="uncertainty" class="list empty">아직 결과가 없습니다.</div></section>
@@ -227,11 +228,68 @@ function subbrainResults(): string {
 }
 
 function subbrainCss(): string {
-  return "body{font:15px system-ui;margin:0;background:#f7f7f4;color:#222}main{max-width:1040px;margin:32px auto;padding:0 20px}.toolbar{display:flex;justify-content:space-between;gap:16px;align-items:center}h1{margin:0;font-size:28px}h2{font-size:15px;margin:0 0 10px}button{border:1px solid #222;background:#222;color:white;padding:9px 12px;border-radius:6px;cursor:pointer}button:hover{background:#444}textarea{width:100%;min-height:96px;margin:10px 0;padding:12px;font:inherit;border:1px solid #bbb;border-radius:6px;box-sizing:border-box}.entry-form,.query{margin-top:18px}.status{margin:16px 0;padding:10px 12px;border:1px solid #d6d0bd;background:#fffaf0;border-radius:6px}.result-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.result-grid>section,.entry-form{background:white;border:1px solid #ddd;border-radius:6px;padding:14px;min-height:180px}.wide{grid-column:1/-1}.item{border-top:1px solid #eee;padding:10px 0}.item:first-child{border-top:0}.meta{color:#666;font-size:13px;margin-top:5px}.badge{display:inline-block;background:#edf2ff;border:1px solid #cad6ff;border-radius:999px;padding:2px 7px;margin-left:6px;font-size:12px}.empty{color:#777}@media(max-width:760px){.toolbar{display:block}.toolbar div{margin-top:12px}.result-grid{grid-template-columns:1fr}}";
+  return "body{font:15px system-ui;margin:0;background:#f7f7f4;color:#222}main{max-width:1040px;margin:32px auto;padding:0 20px}.toolbar{display:flex;justify-content:space-between;gap:16px;align-items:center}h1{margin:0;font-size:28px}h2{font-size:15px;margin:0 0 10px}button{border:1px solid #222;background:#222;color:white;padding:9px 12px;border-radius:6px;cursor:pointer}button:hover{background:#444}textarea{width:100%;min-height:96px;margin:10px 0;padding:12px;font:inherit;border:1px solid #bbb;border-radius:6px;box-sizing:border-box}.entry-form,.query{margin-top:18px}.status{margin:16px 0;padding:10px 12px;border:1px solid #d6d0bd;background:#fffaf0;border-radius:6px}.result-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.result-grid>section,.entry-form{background:white;border:1px solid #ddd;border-radius:6px;padding:14px;min-height:180px}.wide{grid-column:1/-1}.item{border-top:1px solid #eee;padding:10px 0}.item:first-child{border-top:0}.summary{font-size:16px;line-height:1.45}.decision{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px}.metric{border:1px solid #e3e3df;border-radius:6px;padding:10px;background:#fafafa}.metric strong{display:block;font-size:20px}.meta{color:#666;font-size:13px;margin-top:5px}.reason{color:#3d4a57;font-size:13px;margin-top:7px}.badge{display:inline-block;background:#edf2ff;border:1px solid #cad6ff;border-radius:999px;padding:2px 7px;margin:4px 4px 0 0;font-size:12px}.badge.candidate{background:#eef8f0;border-color:#bedfc7}.badge.forgotten{background:#fff3dc;border-color:#efd092}.score{font-variant-numeric:tabular-nums}.meter{height:6px;background:#ecece8;border-radius:999px;margin-top:8px;overflow:hidden}.meter span{display:block;height:100%;background:#4d7c59}.empty{color:#777}@media(max-width:760px){.toolbar{display:block}.toolbar div{margin-top:12px}.result-grid{grid-template-columns:1fr}.decision{grid-template-columns:1fr}}";
 }
 
 function subbrainScript(): string {
-  return "const examples={\"mother-case\":\"열무 가시에 찔린 뒤 왼쪽 검지가 하얘지고 감각이 둔한데 왜 그럴까?\",\"self-insight\":\"내가 왜 요즘 이직 생각을 자주 하지?\",all:\"내가 왜 요즘 이직 생각을 자주 하지?\"};const cases={\"mother-case\":\"finger-cause\",\"self-insight\":\"job-change-pattern\",all:\"job-change-pattern\"};let activeFixture='mother-case';const $=(id)=>document.querySelector(id);const status=$('#status');document.querySelectorAll('[data-seed]').forEach((button)=>button.onclick=async()=>{const fixture=button.dataset.seed;activeFixture=fixture;status.textContent='fixture를 불러오는 중입니다.';$('#question').value=examples[fixture];const response=await fetch('/subbrain/seed',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({fixture,confirmReset:true})});const body=await response.json();status.textContent=response.ok?`${body.fixture} fixture를 불러왔습니다.`:body.error;clearResults();await loadEvents()});$('#save-entry').onclick=async()=>{status.textContent='기록을 저장하는 중입니다.';const text=$('#entry-text').value;const response=await fetch('/subbrain/entries',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text})});const body=await response.json();status.textContent=response.ok?'원문 기록을 기억으로 저장했습니다.':body.error;await loadEvents()};$('#ask').onclick=async()=>{status.textContent='관련 기억을 찾는 중입니다.';const question=$('#question').value;const body=question===examples[activeFixture]?{question,caseId:cases[activeFixture]}:{question};const response=await fetch('/subbrain/ask',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});const data=await response.json();if(!response.ok){status.textContent=data.error;return}render(data)};async function loadEvents(){const response=await fetch('/subbrain/events');renderMemories((await response.json()).events)}function clearResults(){for(const id of ['#candidates','#evidence','#uncertainty','#questions']){$(id).className='list empty';$(id).textContent='질문하면 결과가 표시됩니다.'}}function render(data){status.textContent=data.answer.summary;renderCandidates(data.answer.causalCandidates);renderEvidence(data.answer.evidence,data.context.retrievedMemories);renderList('#uncertainty',data.answer.uncertainty);renderList('#questions',data.answer.suggestedQuestions);renderMemories(data.context.retrievedMemories.map((memory)=>memory.event))}function renderCandidates(items){$('#candidates').className='list';$('#candidates').innerHTML=items.map((item)=>`<div class=\"item\"><strong>${escapeHtml(item.label)}</strong><span class=\"badge\">${item.confidence}</span><div class=\"meta\">${item.eventId}</div><div class=\"meta\">${escapeHtml(item.rationale)}</div></div>`).join('')||'관련 후보가 없습니다.'}function renderEvidence(items,memories){$('#evidence').className='list';$('#evidence').innerHTML=items.map((item)=>{const memory=memories.find((candidate)=>candidate.event.id===item.eventId);const mark=memory?.forgotten?' <span class=\"badge\">잊고 있던 기억</span>':'';return `<div class=\"item\"><strong>${escapeHtml(item.summary)}</strong>${mark}<div class=\"meta\">${item.occurredAt} · ${item.eventId}</div><div class=\"meta\">${escapeHtml(item.reasons.join(', '))}</div></div>`}).join('')||'근거 기억이 없습니다.'}function renderMemories(items){$('#memories').className='list';$('#memories').innerHTML=items.map((item)=>`<div class=\"item\"><strong>${escapeHtml(item.summary)}</strong><div class=\"meta\">${item.occurredAt} · ${item.id}</div><div class=\"meta\">${escapeHtml(item.topics.join(', '))}</div></div>`).join('')||'저장된 기억이 없습니다.'}function renderList(id,items){$(id).className='list';$(id).innerHTML=items.map((item)=>`<div class=\"item\">${escapeHtml(item)}</div>`).join('')||'표시할 내용이 없습니다.'}function escapeHtml(value){return String(value).replace(/[&<>\"]/g,(char)=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[char]))}";
+  return [
+    ...subbrainScriptState(),
+    ...subbrainScriptActions(),
+    ...subbrainScriptSummaryRenderers(),
+    ...subbrainScriptListRenderers(),
+    ...subbrainScriptUtilities(),
+  ].join("\n");
+}
+
+function subbrainScriptState(): string[] {
+  return [
+    'const examples={"mother-case":"열무 가시에 찔린 뒤 왼쪽 검지가 하얘지고 감각이 둔한데 왜 그럴까?","self-insight":"내가 왜 요즘 이직 생각을 자주 하지?",all:"내가 왜 요즘 이직 생각을 자주 하지?"};',
+    'const cases={"mother-case":"finger-cause","self-insight":"job-change-pattern",all:"job-change-pattern"};',
+    "let activeFixture='mother-case';",
+    "const $=(id)=>document.querySelector(id);",
+    "const status=$('#status');",
+    "document.querySelectorAll('[data-seed]').forEach((button)=>button.onclick=async()=>seed(button.dataset.seed));",
+    "$('#save-entry').onclick=async()=>saveEntry();",
+    "$('#ask').onclick=async()=>askQuestion();",
+  ];
+}
+
+function subbrainScriptActions(): string[] {
+  return [
+    "async function seed(fixture){activeFixture=fixture;status.textContent='fixture를 불러오는 중입니다.';$('#question').value=examples[fixture];const response=await postJson('/subbrain/seed',{fixture,confirmReset:true});const body=await response.json();status.textContent=response.ok?body.fixture+' fixture를 불러왔습니다.':body.error;clearResults();await loadEvents()}",
+    "async function saveEntry(){status.textContent='기록을 저장하는 중입니다.';const response=await postJson('/subbrain/entries',{text:$('#entry-text').value});const body=await response.json();status.textContent=response.ok?'원문 기록을 기억으로 저장했습니다.':body.error;await loadEvents()}",
+    "async function askQuestion(){status.textContent='관련 기억을 찾는 중입니다.';const question=$('#question').value;const body=question===examples[activeFixture]?{question,caseId:cases[activeFixture]}:{question};const response=await postJson('/subbrain/ask',body);const data=await response.json();if(!response.ok){status.textContent=data.error;return}render(data)}",
+    "async function postJson(url,body){return fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)})}",
+    "async function loadEvents(){const response=await fetch('/subbrain/events');renderMemories((await response.json()).events)}",
+    "function clearResults(){for(const id of ['#decision','#candidates','#evidence','#uncertainty','#questions']){$(id).className='list empty';$(id).textContent='질문하면 결과가 표시됩니다.'}}",
+    "function render(data){status.textContent=data.answer.summary;renderDecision(data);renderCandidates(data.answer.causalCandidates,data.context.retrievedMemories);renderEvidence(data.answer.evidence,data.context.retrievedMemories);renderList('#uncertainty',data.answer.uncertainty);renderList('#questions',data.answer.suggestedQuestions);renderMemories(data.context.retrievedMemories)}",
+  ];
+}
+
+function subbrainScriptSummaryRenderers(): string[] {
+  return [
+    "function renderDecision(data){const memories=data.context.retrievedMemories;const forgotten=memories.filter((memory)=>memory.forgotten).length;const top=memories[0];$('#decision').className='list';$('#decision').innerHTML='<div class=\"summary\">'+escapeHtml(data.answer.summary)+'</div><div class=\"decision\"><div class=\"metric\"><strong>'+data.answer.causalCandidates.length+'</strong><span>원인 후보</span></div><div class=\"metric\"><strong>'+memories.length+'</strong><span>검색 기억</span></div><div class=\"metric\"><strong>'+forgotten+'</strong><span>잊고 있던 기억</span></div></div>'+topMemoryLine(top)}",
+    "function topMemoryLine(memory){return memory?'<div class=\"item\"><strong>최상위 근거</strong><div class=\"meta\">'+escapeHtml(memory.event.summary)+'</div>'+scoreLine(memory)+'</div>':''}",
+    "function renderCandidates(items,memories){$('#candidates').className='list';$('#candidates').innerHTML=items.map((item)=>{const memory=findMemory(memories,item.eventId);return '<div class=\"item\"><strong>'+escapeHtml(item.label)+'</strong>'+badges(memory,true)+'<div class=\"meta\">'+escapeHtml(item.eventId)+' · '+escapeHtml(item.confidence)+'</div>'+scoreLine(memory)+'<div class=\"reason\">'+escapeHtml(item.rationale)+'</div></div>'}).join('')||'관련 후보가 없습니다.'}",
+  ];
+}
+
+function subbrainScriptListRenderers(): string[] {
+  return [
+    "function renderEvidence(items,memories){$('#evidence').className='list';$('#evidence').innerHTML=items.map((item)=>{const memory=findMemory(memories,item.eventId);return '<div class=\"item\"><strong>'+escapeHtml(item.summary)+'</strong>'+badges(memory,false)+'<div class=\"meta\">'+escapeHtml(item.occurredAt)+' · '+escapeHtml(item.eventId)+'</div>'+scoreLine(memory)+'<div class=\"reason\">매칭 이유: '+escapeHtml(item.reasons.join(', '))+'</div></div>'}).join('')||'근거 기억이 없습니다.'}",
+    "function renderMemories(items){$('#memories').className='list';$('#memories').innerHTML=items.map((item)=>{const memory=normalizeMemory(item);return '<div class=\"item\"><strong>'+escapeHtml(memory.event.summary)+'</strong>'+badges(memory,false)+'<div class=\"meta\">'+escapeHtml(memory.event.occurredAt)+' · '+escapeHtml(memory.event.id)+'</div>'+scoreLine(memory)+'<div class=\"meta\">'+escapeHtml(memory.event.topics.join(', '))+'</div></div>'}).join('')||'저장된 기억이 없습니다.'}",
+    "function scoreLine(memory){if(!memory||typeof memory.score!=='number')return '';const width=Math.max(0,Math.min(100,Math.round(memory.score*10)));return '<div class=\"meta score\">점수 '+memory.score.toFixed(1)+'</div><div class=\"meter\"><span style=\"width:'+width+'%\"></span></div><div class=\"reason\">매칭 이유: '+escapeHtml(memory.reasons.join(', ')||'저장된 기억 목록')+'</div>'}",
+  ];
+}
+
+function subbrainScriptUtilities(): string[] {
+  return [
+    "function badges(memory,candidate){const marks=[];if(candidate)marks.push('<span class=\"badge candidate\">원인 후보</span>');if(memory?.forgotten)marks.push('<span class=\"badge forgotten\">잊고 있던 기억</span>');return marks.join('')}",
+    "function findMemory(memories,eventId){return memories.find((memory)=>memory.event.id===eventId)}",
+    "function normalizeMemory(item){return item.event?item:{event:item,score:null,reasons:[],forgotten:false}}",
+    "function renderList(id,items){$(id).className='list';$(id).innerHTML=items.map((item)=>'<div class=\"item\">'+escapeHtml(item)+'</div>').join('')||'표시할 내용이 없습니다.'}",
+    "function escapeHtml(value){return String(value).replace(/[&<>\"]/g,(char)=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[char]))}",
+  ];
 }
 
 /* v8 ignore next 5 */

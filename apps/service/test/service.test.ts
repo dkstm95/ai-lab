@@ -48,8 +48,10 @@ describe("service", () => {
     expect(response.status).toBe(200);
     const html = await response.text();
     expect(html).toContain("SubBrain");
+    expect(html).toContain("판단 요약");
     expect(html).toContain("가능한 연결 후보");
     expect(html).toContain("근거 기억");
+    expect(html).toContain("매칭 이유");
     expect(html).toContain("잊고 있던 기억");
     expect(html).toContain("원문 기록 추가");
     expect(html).toContain("저장된 기억");
@@ -73,6 +75,8 @@ describe("service", () => {
     expect(answer.status).toBe(200);
     const body = await answer.json();
     expect(body.answer.causalCandidates[0].eventId).toBe("event_steroid_injection");
+    expect(body.context.retrievedMemories[0].score).toBeGreaterThan(0);
+    expect(body.context.retrievedMemories[0].reasons).toContain("link:candidate_cause");
   });
 
   it("rejects destructive SubBrain seed calls without confirmation", async () => {
