@@ -53,7 +53,9 @@ describe("service", () => {
     expect(html).toContain("근거 기억");
     expect(html).toContain("매칭 이유");
     expect(html).toContain("잊고 있던 기억");
-    expect(html).toContain("원문 기록 추가");
+    expect(html).toContain("빠른 기록");
+    expect(html).toContain("quick-entry");
+    expect(html).toContain("추출된 기억");
     expect(html).toContain("저장된 기억");
   });
 
@@ -108,6 +110,9 @@ describe("service", () => {
     });
 
     expect(entry.status).toBe(200);
+    const entryBody = await entry.json();
+    expect(entryBody.events[0].summary).toContain("팀장과 1:1");
+    expect(entryBody.events[0].topics).toContain("업무 방향");
     expect((await events.json()).events[0].topics).toContain("업무 방향");
     expect((await answer.json()).answer.causalCandidates[0].eventId).toContain("event_");
   });

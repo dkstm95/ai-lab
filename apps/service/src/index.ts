@@ -209,9 +209,15 @@ function subbrainQuery(): string {
 
 function subbrainEntryForm(): string {
   return `<section class="entry-form">
-<h2>원문 기록 추가</h2>
+<div class="entry-header"><h2>빠른 기록</h2><button id="save-entry">저장</button></div>
+<input id="quick-entry" value="오늘 팀장과 1:1 후 또 방향이 바뀌어서 답답했다." />
+<div class="entry-examples">
+<button data-entry-example="오늘 팀장과 1:1 후 또 방향이 바뀌어서 답답했다.">업무</button>
+<button data-entry-example="오늘 목이 불편하고 피곤해서 집중이 잘 안 됐다.">컨디션</button>
+<button data-entry-example="왼쪽 손가락 감각이 둔해서 걱정됐다.">증상</button>
+</div>
 <textarea id="entry-text">오늘 팀장과 1:1 후 또 방향이 바뀌어서 답답했다.</textarea>
-<button id="save-entry">기록 저장</button>
+<div id="entry-preview" class="list empty">저장하면 추출된 기억이 표시됩니다.</div>
 </section>`;
 }
 
@@ -228,7 +234,7 @@ function subbrainResults(): string {
 }
 
 function subbrainCss(): string {
-  return "body{font:15px system-ui;margin:0;background:#f7f7f4;color:#222}main{max-width:1040px;margin:32px auto;padding:0 20px}.toolbar{display:flex;justify-content:space-between;gap:16px;align-items:center}h1{margin:0;font-size:28px}h2{font-size:15px;margin:0 0 10px}button{border:1px solid #222;background:#222;color:white;padding:9px 12px;border-radius:6px;cursor:pointer}button:hover{background:#444}textarea{width:100%;min-height:96px;margin:10px 0;padding:12px;font:inherit;border:1px solid #bbb;border-radius:6px;box-sizing:border-box}.entry-form,.query{margin-top:18px}.status{margin:16px 0;padding:10px 12px;border:1px solid #d6d0bd;background:#fffaf0;border-radius:6px}.result-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.result-grid>section,.entry-form{background:white;border:1px solid #ddd;border-radius:6px;padding:14px;min-height:180px}.wide{grid-column:1/-1}.item{border-top:1px solid #eee;padding:10px 0}.item:first-child{border-top:0}.summary{font-size:16px;line-height:1.45}.decision{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px}.metric{border:1px solid #e3e3df;border-radius:6px;padding:10px;background:#fafafa}.metric strong{display:block;font-size:20px}.meta{color:#666;font-size:13px;margin-top:5px}.reason{color:#3d4a57;font-size:13px;margin-top:7px}.badge{display:inline-block;background:#edf2ff;border:1px solid #cad6ff;border-radius:999px;padding:2px 7px;margin:4px 4px 0 0;font-size:12px}.badge.candidate{background:#eef8f0;border-color:#bedfc7}.badge.forgotten{background:#fff3dc;border-color:#efd092}.score{font-variant-numeric:tabular-nums}.meter{height:6px;background:#ecece8;border-radius:999px;margin-top:8px;overflow:hidden}.meter span{display:block;height:100%;background:#4d7c59}.empty{color:#777}@media(max-width:760px){.toolbar{display:block}.toolbar div{margin-top:12px}.result-grid{grid-template-columns:1fr}.decision{grid-template-columns:1fr}}";
+  return "body{font:15px system-ui;margin:0;background:#f7f7f4;color:#222}main{max-width:1040px;margin:32px auto;padding:0 20px}.toolbar{display:flex;justify-content:space-between;gap:16px;align-items:center}h1{margin:0;font-size:28px}h2{font-size:15px;margin:0}button{border:1px solid #222;background:#222;color:white;padding:9px 12px;border-radius:6px;cursor:pointer}button:hover{background:#444}input,textarea{width:100%;margin:10px 0;padding:12px;font:inherit;border:1px solid #bbb;border-radius:6px;box-sizing:border-box}textarea{min-height:76px}.entry-form,.query{margin-top:18px}.entry-header{display:flex;align-items:center;justify-content:space-between;gap:12px}.entry-examples{display:flex;gap:8px;flex-wrap:wrap}.entry-examples button{background:white;color:#222;border-color:#ccc}.status{margin:16px 0;padding:10px 12px;border:1px solid #d6d0bd;background:#fffaf0;border-radius:6px}.result-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.result-grid>section,.entry-form{background:white;border:1px solid #ddd;border-radius:6px;padding:14px;min-height:180px}.wide{grid-column:1/-1}.item{border-top:1px solid #eee;padding:10px 0}.item:first-child{border-top:0}.summary{font-size:16px;line-height:1.45}.decision{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px}.metric{border:1px solid #e3e3df;border-radius:6px;padding:10px;background:#fafafa}.metric strong{display:block;font-size:20px}.meta{color:#666;font-size:13px;margin-top:5px}.reason{color:#3d4a57;font-size:13px;margin-top:7px}.badge{display:inline-block;background:#edf2ff;border:1px solid #cad6ff;border-radius:999px;padding:2px 7px;margin:4px 4px 0 0;font-size:12px}.badge.candidate{background:#eef8f0;border-color:#bedfc7}.badge.forgotten{background:#fff3dc;border-color:#efd092}.score{font-variant-numeric:tabular-nums}.meter{height:6px;background:#ecece8;border-radius:999px;margin-top:8px;overflow:hidden}.meter span{display:block;height:100%;background:#4d7c59}.empty{color:#777}@media(max-width:760px){.toolbar{display:block}.toolbar div{margin-top:12px}.result-grid{grid-template-columns:1fr}.decision{grid-template-columns:1fr}}";
 }
 
 function subbrainScript(): string {
@@ -249,6 +255,8 @@ function subbrainScriptState(): string[] {
     "const $=(id)=>document.querySelector(id);",
     "const status=$('#status');",
     "document.querySelectorAll('[data-seed]').forEach((button)=>button.onclick=async()=>seed(button.dataset.seed));",
+    "document.querySelectorAll('[data-entry-example]').forEach((button)=>button.onclick=()=>setEntryText(button.dataset.entryExample));",
+    "$('#quick-entry').oninput=()=>{$('#entry-text').value=$('#quick-entry').value};",
     "$('#save-entry').onclick=async()=>saveEntry();",
     "$('#ask').onclick=async()=>askQuestion();",
   ];
@@ -257,10 +265,12 @@ function subbrainScriptState(): string[] {
 function subbrainScriptActions(): string[] {
   return [
     "async function seed(fixture){activeFixture=fixture;status.textContent='fixture를 불러오는 중입니다.';$('#question').value=examples[fixture];const response=await postJson('/subbrain/seed',{fixture,confirmReset:true});const body=await response.json();status.textContent=response.ok?body.fixture+' fixture를 불러왔습니다.':body.error;clearResults();await loadEvents()}",
-    "async function saveEntry(){status.textContent='기록을 저장하는 중입니다.';const response=await postJson('/subbrain/entries',{text:$('#entry-text').value});const body=await response.json();status.textContent=response.ok?'원문 기록을 기억으로 저장했습니다.':body.error;await loadEvents()}",
+    "async function saveEntry(){status.textContent='기록을 저장하는 중입니다.';const response=await postJson('/subbrain/entries',{text:entryText()});const body=await response.json();status.textContent=response.ok?'기억으로 저장했습니다.':body.error;if(response.ok)renderEntryPreview(body.events);await loadEvents()}",
     "async function askQuestion(){status.textContent='관련 기억을 찾는 중입니다.';const question=$('#question').value;const body=question===examples[activeFixture]?{question,caseId:cases[activeFixture]}:{question};const response=await postJson('/subbrain/ask',body);const data=await response.json();if(!response.ok){status.textContent=data.error;return}render(data)}",
     "async function postJson(url,body){return fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)})}",
     "async function loadEvents(){const response=await fetch('/subbrain/events');renderMemories((await response.json()).events)}",
+    "function entryText(){return ($('#quick-entry').value||$('#entry-text').value).trim()}",
+    "function setEntryText(text){$('#quick-entry').value=text;$('#entry-text').value=text}",
     "function clearResults(){for(const id of ['#decision','#candidates','#evidence','#uncertainty','#questions']){$(id).className='list empty';$(id).textContent='질문하면 결과가 표시됩니다.'}}",
     "function render(data){status.textContent=data.answer.summary;renderDecision(data);renderCandidates(data.answer.causalCandidates,data.context.retrievedMemories);renderEvidence(data.answer.evidence,data.context.retrievedMemories);renderList('#uncertainty',data.answer.uncertainty);renderList('#questions',data.answer.suggestedQuestions);renderMemories(data.context.retrievedMemories)}",
   ];
@@ -277,6 +287,7 @@ function subbrainScriptSummaryRenderers(): string[] {
 function subbrainScriptListRenderers(): string[] {
   return [
     "function renderEvidence(items,memories){$('#evidence').className='list';$('#evidence').innerHTML=items.map((item)=>{const memory=findMemory(memories,item.eventId);return '<div class=\"item\"><strong>'+escapeHtml(item.summary)+'</strong>'+badges(memory,false)+'<div class=\"meta\">'+escapeHtml(item.occurredAt)+' · '+escapeHtml(item.eventId)+'</div>'+scoreLine(memory)+'<div class=\"reason\">매칭 이유: '+escapeHtml(item.reasons.join(', '))+'</div></div>'}).join('')||'근거 기억이 없습니다.'}",
+    "function renderEntryPreview(items){$('#entry-preview').className='list';$('#entry-preview').innerHTML=items.map((item)=>'<div class=\"item\"><strong>'+escapeHtml(item.summary)+'</strong>'+eventBadges(item)+'<div class=\"meta\">'+escapeHtml(item.occurredAt)+' · '+escapeHtml(item.id)+'</div><div class=\"reason\">'+eventDetails(item)+'</div></div>').join('')||'추출된 기억이 없습니다.'}",
     "function renderMemories(items){$('#memories').className='list';$('#memories').innerHTML=items.map((item)=>{const memory=normalizeMemory(item);return '<div class=\"item\"><strong>'+escapeHtml(memory.event.summary)+'</strong>'+badges(memory,false)+'<div class=\"meta\">'+escapeHtml(memory.event.occurredAt)+' · '+escapeHtml(memory.event.id)+'</div>'+scoreLine(memory)+'<div class=\"meta\">'+escapeHtml(memory.event.topics.join(', '))+'</div></div>'}).join('')||'저장된 기억이 없습니다.'}",
     "function scoreLine(memory){if(!memory||typeof memory.score!=='number')return '';const width=Math.max(0,Math.min(100,Math.round(memory.score*10)));return '<div class=\"meta score\">점수 '+memory.score.toFixed(1)+'</div><div class=\"meter\"><span style=\"width:'+width+'%\"></span></div><div class=\"reason\">매칭 이유: '+escapeHtml(memory.reasons.join(', ')||'저장된 기억 목록')+'</div>'}",
   ];
@@ -287,6 +298,8 @@ function subbrainScriptUtilities(): string[] {
     "function badges(memory,candidate){const marks=[];if(candidate)marks.push('<span class=\"badge candidate\">원인 후보</span>');if(memory?.forgotten)marks.push('<span class=\"badge forgotten\">잊고 있던 기억</span>');return marks.join('')}",
     "function findMemory(memories,eventId){return memories.find((memory)=>memory.event.id===eventId)}",
     "function normalizeMemory(item){return item.event?item:{event:item,score:null,reasons:[],forgotten:false}}",
+    "function eventBadges(item){return [...item.topics,...item.emotions].slice(0,4).map((value)=>'<span class=\"badge\">'+escapeHtml(value)+'</span>').join('')}",
+    "function eventDetails(item){const attrs=item.attributes.map((attr)=>attr.name+': '+attr.value);const entities=item.entities.map((entity)=>entity.name);return escapeHtml([...attrs,...entities].join(', ')||'추가 단서 없음')}",
     "function renderList(id,items){$(id).className='list';$(id).innerHTML=items.map((item)=>'<div class=\"item\">'+escapeHtml(item)+'</div>').join('')||'표시할 내용이 없습니다.'}",
     "function escapeHtml(value){return String(value).replace(/[&<>\"]/g,(char)=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[char]))}",
   ];
