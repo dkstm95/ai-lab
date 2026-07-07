@@ -196,6 +196,47 @@ describe("subbrain", () => {
     store.close();
   });
 
+  it("retrieves personal records together with fixture memories for one question", async () => {
+    const store = await seededStore(selfInsightFixture);
+    const engine = new SubbrainEngine(store);
+
+    await engine.addEntry({
+      id: "entry_manual_direction",
+      text: "오늘 팀장과 1:1 후 또 방향이 바뀌어서 답답했고 이직 생각이 났다.",
+      recordedAt: "2026-06-28T20:00:00+09:00",
+    });
+    await engine.addEntry({
+      id: "entry_manual_condition",
+      text: "오늘 목이 불편하고 피곤해서 집중이 잘 안 됐다.",
+      recordedAt: "2026-06-28T21:00:00+09:00",
+    });
+
+    const result = await engine.answer(
+      inferRetrievalQuery("왜 팀장과 일하면 답답하고 이직 생각이 들까?", "2026-06-30"),
+    );
+    const sourceEntryIds = result.context.retrievedMemories.map(
+      (memory) => memory.event.sourceEntryId,
+    );
+
+    expect(sourceEntryIds).toEqual(
+      expect.arrayContaining([
+        "entry_manual_direction",
+        "entry_direction_change",
+        "entry_job_change_again",
+      ]),
+    );
+    expect(sourceEntryIds).not.toContain("entry_manual_condition");
+    expect(result.answer.evidence.map((evidence) => evidence.sourceEntryId)).toEqual(
+      expect.arrayContaining(["entry_manual_direction", "entry_direction_change"]),
+    );
+    expect(
+      result.context.retrievedMemories.find(
+        (memory) => memory.event.sourceEntryId === "entry_manual_direction",
+      )?.reasons,
+    ).toEqual(expect.arrayContaining(["fts:text", "topic:overlap", "entity:overlap"]));
+    store.close();
+  });
+
   it("deduplicates repeated raw entries into one stable memory event", async () => {
     const store = await emptyStore();
     const engine = new SubbrainEngine(store);
