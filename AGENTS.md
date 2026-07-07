@@ -2,11 +2,13 @@
 
 이 문서는 AI 작업자의 문서 지도다.
 작업 전 필요한 문서만 골라 읽는다.
+단, 사용자의 공개 가능한 판단 기준이 작업에 영향을 주므로 `SOUL.md`는 항상 먼저 참조한다.
 
 ## 문서 지도
 
 - `README.md`: 프로젝트 목적, 빠른 실행, CLI/service 사용법
 - `README.ko.md`: 한국어 프로젝트 개요와 빠른 실행
+- `SOUL.md`: 사용자의 공개 가능한 판단 기준, 작업 선호, AI 위임 기준
 - `docs/system-design.md`: monorepo 구조, 패키지 책임, 의존 방향, provider 방식
 - `docs/development-guide.md`: 설치, 실행, 검증, Git hook 기준
 - `docs/testing-guide.md`: 테스트 작성과 리뷰 기준
@@ -18,6 +20,7 @@
 ## 작업 기준
 
 - 코드 변경 후 관련 문서가 최신인지 확인한다.
+- 모든 작업에서 `SOUL.md`의 공개 가능한 판단 기준과 AI 위임 기준을 우선 참조한다.
 - 실행과 검증 기준은 `docs/development-guide.md`를 따른다.
 - 테스트 작성 기준은 `docs/testing-guide.md`를 따른다.
 - 커밋, PR, 리뷰 기준은 `docs/contribution-guide.md`를 따른다.
