@@ -52,7 +52,8 @@ API providers and subscription/external runner providers are intentionally exclu
 git config core.hooksPath .githooks
 ```
 
-Both pre-commit and pre-push hooks run `scripts/verify.sh`.
+The pre-commit hook runs formatting, lint, dependency-boundary, and type checks for fast feedback.
+The pre-push hook runs the full `scripts/verify.sh` verification, including coverage, build, and docs checks.
 
 Commit and pull request rules are in `docs/contribution-guide.md`.
 

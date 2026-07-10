@@ -315,20 +315,13 @@ function ingestTargets(sourceId: string): string[] {
 function ingestPrompt(sourceId: string): string {
   return [
     `Ingest source ${sourceId} into the LLM Wiki.`,
-    "Read schema.md first, then index.md, then the raw source.",
-    "Preserve source coverage before compression: keep distinct operating models, practices, risks, and tradeoffs as separate source-backed claims.",
-    "Create or update source, concept, entity, and synthesis pages when the source contains reusable knowledge beyond a one-off summary.",
-    "Flag contradictions with conflicted pages instead of overwriting silently.",
-    "Update index.md and append log.md in the same update.",
+    "Use the provided context and expected files; follow schema.md.",
   ].join("\n");
 }
 
 function queryPrompt(question: string): string {
   return [
-    "Answer from the LLM Wiki.",
-    "Read index.md first, then the provided relevant pages.",
-    "Cite page/source paths for accepted claims.",
-    "File reusable answers under pages/questions or pages/syntheses.",
+    "Answer from the provided LLM Wiki context according to schema.md.",
     `Question: ${question}`,
   ].join("\n");
 }
@@ -361,11 +354,8 @@ function evolvePacket(
 
 function evolvePrompt(report: WikiLintReport): string {
   return [
-    "Evolve the LLM Wiki without calling model APIs from this package.",
-    `Start with ${report.issues.length} deterministic lint issue(s).`,
-    "Read schema.md, index.md, log.md, candidate pages, and recent run records.",
-    "Prepare the smallest validated wiki update that improves durable knowledge quality.",
-    "If no safe improvement exists, record the reason instead of editing pages.",
+    `Evolve the LLM Wiki from ${report.issues.length} deterministic lint issue(s).`,
+    "Follow schema.md. If no source-backed improvement exists, record why without editing pages.",
   ].join("\n");
 }
 

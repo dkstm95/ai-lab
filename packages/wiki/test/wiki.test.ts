@@ -70,9 +70,9 @@ describe("wiki", () => {
 
     expect(packet.task).toBe("ingest");
     expect(packet.contextFiles).toContain(`raw/sources/${source.id}.md`);
-    expect(packet.prompt).toContain("Read schema.md first");
-    expect(packet.prompt).toContain("Preserve source coverage before compression");
-    expect(packet.prompt).toContain("reusable knowledge beyond a one-off summary");
+    expect(packet.prompt).toBe(
+      `Ingest source ${source.id} into the LLM Wiki.\nUse the provided context and expected files; follow schema.md.`,
+    );
     expect(packet.expectedFiles).toContain(`pages/sources/${source.id}.md`);
     expect(packet.expectedFiles).toContain("pages/entities/*.md");
     expect(packet.constraints).toContain("Preserve raw sources as immutable evidence.");
@@ -221,8 +221,10 @@ describe("wiki", () => {
 
     expect(packet.task).toBe("query");
     expect(packet.contextFiles).toContain("pages/concepts/llm-wiki.md");
-    expect(packet.prompt).toContain("How does LLM Wiki work?");
-    expect(packet.prompt).toContain("File reusable answers");
+    expect(packet.prompt).toBe(
+      "Answer from the provided LLM Wiki context according to schema.md.\n" +
+        "Question: How does LLM Wiki work?",
+    );
   });
 
   it("prepares evolve task packets for manual or automated improvement", async () => {
@@ -246,6 +248,8 @@ describe("wiki", () => {
     expect(packet.contextFiles).toContain("pages/concepts/llm-wiki.md");
     expect(packet.contextFiles.some((path) => path.startsWith("raw/runs/"))).toBe(true);
     expect(packet.expectedFiles).toContain("pages/**/*.md");
+    expect(packet.prompt).toContain("deterministic lint issue(s)");
+    expect(packet.prompt).toContain("Follow schema.md");
     expect(packet.constraints).toContain(
       "Do not modify raw/sources or raw/runs from an evolve update.",
     );
