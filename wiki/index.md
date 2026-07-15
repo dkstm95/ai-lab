@@ -9,3 +9,7 @@
 
 - [LLM Wiki Operating Model](pages/concepts/llm-wiki-operating-model.md) - durable knowledge compilation workflow with immutable sources, compiled pages, lint, review gates, and drift control.
 - [Principal IC Operating Model](pages/concepts/principal-ic-operating-model.md) - leverage model for principal ICs working through judgment, alignment, sponsorship, and delegation.
+
+## Failures
+
+- [Memory Candidate Scope Mismatch](pages/failures/memory-candidate-scope-mismatch.md) - correction for answering personal-memory questions with generic process lessons instead of the requested user context.

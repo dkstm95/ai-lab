@@ -4,7 +4,7 @@ slug: llm-wiki-operating-model
 kind: concept
 status: active
 createdAt: 2026-06-19T00:00:00.000Z
-updatedAt: 2026-06-19T01:00:00.000Z
+updatedAt: 2026-07-15T03:54:12.000Z
 reviewAfter: 2026-12-19T00:00:00.000Z
 sources:
   - raw/sources/karpathy-llm-wiki.md
@@ -39,3 +39,4 @@ An LLM Wiki is a durable knowledge compilation workflow. Raw sources stay immuta
 ## Links
 
 - [[karpathy-llm-wiki]]
+- [[memory-candidate-scope-mismatch]]
