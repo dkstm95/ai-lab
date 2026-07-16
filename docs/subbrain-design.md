@@ -17,18 +17,16 @@ question, and builds evidence-backed context for a later LLM answer.
 
 - Manual text entries only.
 - SQLite file storage through a replaceable store interface.
-- Replaceable ports for memory extraction, query interpretation, and answer
-  generation.
+- Replaceable ports for memory extraction, event linking, query interpretation,
+  and answer generation.
 - Two fixture domains: daily events with a missed prior event, and self-insight
   with repeated patterns.
 - Relationship context is a later extension, but entity and event-link shapes
   must not block it.
 - Core package and tests first; service exposure stays as a thin local test shell.
 
-The local service may expose a thin `/subbrain` test page for manual validation.
-Its JSON routes are private demo helpers and must not be treated as stable
-product APIs. Product UI, auth, billing, sync, and real model adapters remain
-out of scope.
+The local `/subbrain` test page and its JSON routes are private demo helpers, not
+stable product APIs. Product UI, auth, billing, sync, and real adapters remain out of scope.
 
 ## Core Concepts
 
@@ -51,17 +49,15 @@ the `@ai-lab/subbrain/sqlite` subpath. The core package entrypoint exposes a
 store interface so the same memory logic can move to a product project later
 without loading `node:sqlite`.
 
-The SQLite schema keeps raw entries, events, entities, event-entity links,
-attributes, event links, and an FTS index. It sets a schema version with
-`PRAGMA user_version` so future migrations have an explicit starting point.
+The schema keeps raw entries, events, entities, attributes, links, and an FTS
+index. Version 2 enforces foreign keys, confidence checks, and link uniqueness;
+opening version 0 or 1 rebuilds derived tables and FTS in one transaction.
 
-Raw entries are upserted by id. Memory events are upserted by stable event id,
-and the default rule-based extractor derives that id from the event date and
-normalized source text. Re-saving the same entry replaces previous extracted
-events for that source entry, while repeating the same text on the same day
-collapses into one searchable memory event. Entry saving is atomic in the
-SQLite store: raw entry upsert, derived-event replacement, entity/attribute
-writes, and FTS writes are committed or rolled back together.
+The default extractor derives a stable event id from the source entry id, date,
+and full normalized text. Re-saving replaces only that source's events; matching
+entries remain separate because provenance takes priority over cross-entry
+deduplication. Entry writes are atomic, and deletion explicitly clears FTS rows
+because foreign keys do not cascade into virtual tables.
 
 ## Retrieval
 
@@ -70,8 +66,11 @@ The first retrieval pass combines:
 - SQLite FTS hits for direct keyword evidence.
 - Structured overlap for topics, emotions, entities, and attributes.
 - Temporal ordering for events before the question reference time.
-- A forgotten-memory signal when an event is relevant but not directly named in
-  the question.
+- A forgotten-memory signal based on discriminative terms shared by the question
+  and original raw entry, not broad facets attached during extraction.
+
+Links require positive confidence. Candidate causes must precede their target,
+both events must be valid at the reference date, and confidence scales link score.
 
 Embeddings and graph traversal are later additions after the deterministic
 baseline is measurable.
@@ -92,8 +91,9 @@ The MVP should pass fixture tests before product work starts:
 
 - `Recall@5 >= 80%`
 - `Recall@10 >= 90%`
-- `ForgottenMemoryHitRate >= 70%`
-- `EvidenceCoverage = 100%`
+- Returned-result precision at limits 5 and 10 is at least 80%.
+- Forgotten-memory hit rate is at least 70%, with precision at 100%.
+- Deterministic `AnswerEvidenceCoverage = 100%`.
 - Causal humility and abstention cases pass.
 - Temporal ordering distinguishes prior events from later observations.
 - Linked prior cause candidates outrank direct but weaker distractors.
@@ -110,6 +110,7 @@ packet builder, answer contract, fixtures, and tests.
 `SubbrainEngine` wires these portable pieces through explicit ports:
 
 - `MemoryExtractor`: raw entry to memory events.
+- `EventLinker`: new and stored events to cautious candidate or similarity links.
 - `QueryInterpreter`: user question to retrieval query.
 - `AnswerModel`: context packet to answer draft.
 
@@ -117,11 +118,17 @@ The default implementations are deterministic and rule-based. Real LLM-backed
 implementations should live outside this package or be injected through these
 interfaces so storage and retrieval remain provider-independent.
 
-Injected model outputs are treated as untrusted. The engine validates extracted
-events, inferred retrieval queries, and answer drafts at runtime. Invalid memory
-events are rejected before storage. Invalid answer drafts may be retried, then
-fall back to a cautious abstention answer that does not introduce unsupported
-causal candidates.
+Injected model outputs are treated as untrusted. The engine validates raw
+entries, extracted events and links, direct or inferred queries, and answer
+drafts at runtime. Invalid derived records are rejected before storage. Answer
+causal candidates must come from the context packet's candidate set, and every
+evidence field must exactly match the canonical retrieved memory. Invalid answer
+drafts may be retried, then fall back to a cautious abstention answer.
+
+The default linker creates low-confidence candidate-cause links for ordered
+events sharing a body area and similarity links for repeated work reflections.
+Fixtures remain scorer inputs; richer LLM linking can be injected through the
+same validated port.
 
 ## Later Extensions
 

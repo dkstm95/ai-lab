@@ -48,8 +48,8 @@ describe("service", () => {
     expect(response.status).toBe(200);
     const html = await response.text();
     expect(html).toContain("SubBrain");
-    expect(html).toContain("판단 요약");
-    expect(html).toContain("가능한 연결 후보");
+    expect(html).toContain("기록 연결 요약");
+    expect(html).toContain("확인 후보");
     expect(html).toContain("근거 기억");
     expect(html).toContain("매칭 이유");
     expect(html).toContain("잊고 있던 기억");
@@ -69,7 +69,10 @@ describe("service", () => {
     });
     const answer = await app.request("/subbrain/ask", {
       method: "POST",
-      body: JSON.stringify({ caseId: "finger-cause" }),
+      body: JSON.stringify({
+        question: "열무 가시에 찔린 뒤 왼쪽 검지가 하얘지고 감각이 둔한데 왜 그럴까?",
+        referenceDate: "2026-06-27",
+      }),
       headers: { "content-type": "application/json" },
     });
 
@@ -78,7 +81,11 @@ describe("service", () => {
     const body = await answer.json();
     expect(body.answer.causalCandidates[0].eventId).toBe("event_steroid_injection");
     expect(body.context.retrievedMemories[0].score).toBeGreaterThan(0);
-    expect(body.context.retrievedMemories[0].reasons).toContain("link:candidate_cause");
+    expect(
+      body.context.retrievedMemories.find(
+        (memory: { event: { id: string } }) => memory.event.id === "event_steroid_injection",
+      ).reasons,
+    ).toContain("link:candidate_cause");
   });
 
   it("rejects destructive SubBrain seed calls without confirmation", async () => {
@@ -92,6 +99,27 @@ describe("service", () => {
 
     expect(seed.status).toBe(400);
     await expect(seed.json()).resolves.toEqual({ error: "seed requires confirmReset=true" });
+  });
+
+  it("rejects unknown SubBrain fixtures before resetting storage", async () => {
+    const app = createApp(await tempRoot());
+
+    const entry = await app.request("/subbrain/entries", {
+      method: "POST",
+      body: JSON.stringify({ text: "오늘 팀장과 1:1 후 또 방향이 바뀌어서 답답했다." }),
+      headers: { "content-type": "application/json" },
+    });
+    const seed = await app.request("/subbrain/seed", {
+      method: "POST",
+      body: JSON.stringify({ confirmReset: true, fixture: "typo" }),
+      headers: { "content-type": "application/json" },
+    });
+    const events = await app.request("/subbrain/events");
+
+    expect(entry.status).toBe(200);
+    expect(seed.status).toBe(400);
+    await expect(seed.json()).resolves.toEqual({ error: "unknown SubBrain fixture" });
+    expect((await events.json()).events).toHaveLength(1);
   });
 
   it("adds raw SubBrain entries and asks against extracted memories", async () => {
@@ -114,7 +142,51 @@ describe("service", () => {
     expect(entryBody.events[0].summary).toContain("팀장과 1:1");
     expect(entryBody.events[0].topics).toContain("업무 방향");
     expect((await events.json()).events[0].topics).toContain("업무 방향");
-    expect((await answer.json()).answer.causalCandidates[0].eventId).toContain("event_");
+    const answerBody = await answer.json();
+    expect(answerBody.context.retrievedMemories[0].event.sourceEntryId).toBe(entryBody.entry.id);
+    expect(answerBody.answer.evidence[0].sourceEntryId).toBe(entryBody.entry.id);
+    expect(answerBody.answer.causalCandidates).toEqual([]);
+    expect(answerBody.answer.summary).toContain("원인 연결 후보를 만들 근거는 충분하지 않습니다");
+  });
+
+  it("links manual records before answering with a cautious cause candidate", async () => {
+    const app = createApp(await tempRoot());
+    const treatment = await app.request("/subbrain/entries", {
+      method: "POST",
+      body: JSON.stringify({
+        text: "왼쪽 검지에 스테로이드 주사를 맞았다.",
+        recordedAt: "2026-05-15T20:00:00+09:00",
+      }),
+      headers: { "content-type": "application/json" },
+    });
+    const symptom = await app.request("/subbrain/entries", {
+      method: "POST",
+      body: JSON.stringify({
+        text: "왼쪽 검지가 하얘지고 감각이 둔한 증상이 이어졌다.",
+        recordedAt: "2026-06-26T20:00:00+09:00",
+      }),
+      headers: { "content-type": "application/json" },
+    });
+    const treatmentBody = await treatment.json();
+    const symptomBody = await symptom.json();
+
+    const answer = await app.request("/subbrain/ask", {
+      method: "POST",
+      body: JSON.stringify({
+        question: "왼쪽 검지가 하얘지고 감각이 둔한 이유는?",
+        referenceDate: "2026-06-27",
+      }),
+      headers: { "content-type": "application/json" },
+    });
+    const answerBody = await answer.json();
+
+    expect(symptomBody.links).toContainEqual(
+      expect.objectContaining({
+        fromEventId: treatmentBody.events[0].id,
+        type: "candidate_cause",
+      }),
+    );
+    expect(answerBody.answer.causalCandidates[0].eventId).toBe(treatmentBody.events[0].id);
   });
 
   it("rejects empty SubBrain questions and entries", async () => {
@@ -133,6 +205,53 @@ describe("service", () => {
 
     expect(entry.status).toBe(400);
     expect(answer.status).toBe(400);
+  });
+
+  it("rejects invalid SubBrain JSON field types with client errors", async () => {
+    const app = createApp(await tempRoot());
+    const requests = [
+      app.request("/subbrain/ask", {
+        method: "POST",
+        body: JSON.stringify({ question: 42 }),
+        headers: { "content-type": "application/json" },
+      }),
+      app.request("/subbrain/entries", {
+        method: "POST",
+        body: JSON.stringify({ text: null }),
+        headers: { "content-type": "application/json" },
+      }),
+      app.request("/subbrain/ask", {
+        method: "POST",
+        body: "null",
+        headers: { "content-type": "application/json" },
+      }),
+    ];
+
+    for (const response of await Promise.all(requests)) {
+      expect(response.status).toBe(400);
+    }
+  });
+
+  it("always interprets the supplied question instead of fixture case ids", async () => {
+    const app = createApp(await tempRoot());
+    await app.request("/subbrain/seed", {
+      method: "POST",
+      body: JSON.stringify({ confirmReset: true, fixture: "mother-case" }),
+      headers: { "content-type": "application/json" },
+    });
+
+    const response = await app.request("/subbrain/ask", {
+      method: "POST",
+      body: JSON.stringify({
+        question: "제주도 카페에서 누구를 만났지?",
+        caseId: "finger-cause",
+        referenceDate: "2026-06-27",
+      }),
+      headers: { "content-type": "application/json" },
+    });
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).answer.question).toBe("제주도 카페에서 누구를 만났지?");
   });
 });
 

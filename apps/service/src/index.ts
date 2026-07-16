@@ -37,34 +37,48 @@ function registerAgentRoutes(
 
 function registerSubbrainRoutes(app: Hono, root: string): void {
   app.get("/subbrain", (context) => context.html(subbrainPage()));
-  app.post("/subbrain/seed", async (context) => {
-    const body = await jsonBody<{ confirmReset?: boolean; fixture?: string }>(context);
-    if (body.confirmReset !== true) {
-      return badRequest(context, "seed requires confirmReset=true");
-    }
-    return subbrainJson(context, () => {
-      seedSubbrain(root, body.fixture ?? "mother-case");
-      return { status: "ok", fixture: body.fixture ?? "mother-case" };
-    });
-  });
-  app.post("/subbrain/ask", async (context) => {
-    const body = await jsonBody<{ question?: string; caseId?: string }>(context);
-    return subbrainJson(context, () => askSubbrain(root, body));
-  });
-  app.post("/subbrain/entries", async (context) => {
-    const body = await jsonBody<{ text?: string; recordedAt?: string }>(context);
-    return subbrainJson(context, () => addSubbrainEntry(root, body));
-  });
+  app.post("/subbrain/seed", (context) => seedSubbrainRoute(context, root));
+  app.post("/subbrain/ask", (context) =>
+    subbrainJson(context, async () => askSubbrain(root, askBody(await jsonBody(context)))),
+  );
+  app.post("/subbrain/entries", (context) =>
+    subbrainJson(context, async () => addSubbrainEntry(root, entryBody(await jsonBody(context)))),
+  );
   app.get("/subbrain/events", (context) => {
     return context.json({ events: listSubbrainEvents(root) });
   });
 }
 
-async function askSubbrain(root: string, body: { question?: string; caseId?: string }) {
+async function seedSubbrainRoute(context: Context, root: string) {
+  let body: ReturnType<typeof seedBody>;
+  try {
+    body = seedBody(await jsonBody(context));
+  } catch (error) {
+    if (error instanceof SubbrainValidationError) {
+      return badRequest(context, error.message);
+    }
+    throw error;
+  }
+  const fixture = body.fixture ?? "mother-case";
+  if (body.confirmReset !== true) {
+    return badRequest(context, "seed requires confirmReset=true");
+  }
+  if (!knownFixtureName(fixture)) {
+    return badRequest(context, "unknown SubBrain fixture");
+  }
+  return subbrainJson(context, () => {
+    seedSubbrain(root, fixture);
+    return { status: "ok", fixture };
+  });
+}
+
+async function askSubbrain(root: string, body: { question: string; referenceDate?: string }) {
   const store = openSubbrainStore(root);
   try {
     const engine = new SubbrainEngine(store);
-    return engine.answer(await queryFromBody(engine, body));
+    return engine.answer(
+      await engine.inferQuery(body.question.trim(), body.referenceDate ?? todayDate()),
+    );
   } finally {
     store.close();
   }
@@ -82,7 +96,7 @@ function seedSubbrain(root: string, fixtureName: string): void {
   }
 }
 
-async function addSubbrainEntry(root: string, body: { text?: string; recordedAt?: string }) {
+async function addSubbrainEntry(root: string, body: { text: string; recordedAt?: string }) {
   const entry = rawEntryFromBody(body);
   const store = openSubbrainStore(root);
   try {
@@ -109,18 +123,19 @@ function selectedFixtures(name: string) {
       : [motherCaseFixture];
 }
 
-async function queryFromBody(engine: SubbrainEngine, body: { question?: string; caseId?: string }) {
-  const fixtureCase = [...motherCaseFixture.cases, ...selfInsightFixture.cases].find(
-    (candidate) => candidate.id === body.caseId,
-  );
-  return fixtureCase?.query ?? (await engine.inferQuery(body.question?.trim() ?? ""));
+function knownFixtureName(name: string): boolean {
+  return ["mother-case", "self-insight", "all"].includes(name);
 }
 
-function rawEntryFromBody(body: { text?: string; recordedAt?: string }) {
-  const recordedAt = body.recordedAt ?? new Date().toISOString();
-  const text = body.text?.trim() ?? "";
+function todayDate(): string {
+  return localDate(new Date());
+}
+
+function rawEntryFromBody(body: { text: string; recordedAt?: string }) {
+  const recordedAt = body.recordedAt ?? localTimestamp(new Date());
+  const text = body.text.trim();
   if (text === "") {
-    throw new SubbrainValidationError("memory_event", [
+    throw new SubbrainValidationError("raw_entry", [
       { path: "entry.text", message: "Expected non-empty text." },
     ]);
   }
@@ -144,8 +159,83 @@ function subbrainDbPath(root: string): string {
   return join(root, ".subbrain", "demo.sqlite");
 }
 
-async function jsonBody<T>(context: Context): Promise<T> {
-  return context.req.json<T>().catch(() => ({}) as T);
+async function jsonBody(context: Context): Promise<unknown> {
+  return context.req.json<unknown>().catch(() => ({}));
+}
+
+function askBody(value: unknown): { question: string; referenceDate?: string } {
+  const body = bodyRecord(value, "retrieval_query");
+  const question = optionalText(body.question, "query.text", "retrieval_query") ?? "";
+  const referenceDate = optionalText(body.referenceDate, "query.referenceDate", "retrieval_query");
+  return referenceDate === undefined ? { question } : { question, referenceDate };
+}
+
+function entryBody(value: unknown): { text: string; recordedAt?: string } {
+  const body = bodyRecord(value, "raw_entry");
+  const text = optionalText(body.text, "entry.text", "raw_entry") ?? "";
+  const recordedAt = optionalText(body.recordedAt, "entry.recordedAt", "raw_entry");
+  return recordedAt === undefined ? { text } : { text, recordedAt };
+}
+
+function seedBody(value: unknown): { confirmReset?: boolean; fixture?: string } {
+  const body = bodyRecord(value, "raw_entry");
+  if (body.confirmReset !== undefined && typeof body.confirmReset !== "boolean") {
+    throw requestIssue("raw_entry", "seed.confirmReset", "Expected a boolean.");
+  }
+  const confirmReset = body.confirmReset as boolean | undefined;
+  const fixture = optionalText(body.fixture, "seed.fixture", "raw_entry");
+  return {
+    ...(confirmReset === undefined ? {} : { confirmReset }),
+    ...(fixture === undefined ? {} : { fixture }),
+  };
+}
+
+function bodyRecord(value: unknown, kind: "raw_entry" | "retrieval_query") {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw requestIssue(kind, "body", "Expected a JSON object.");
+  }
+  return value as Readonly<Record<string, unknown>>;
+}
+
+function optionalText(
+  value: unknown,
+  path: string,
+  kind: "raw_entry" | "retrieval_query",
+): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string") {
+    throw requestIssue(kind, path, "Expected text.");
+  }
+  return value;
+}
+
+function requestIssue(
+  kind: "raw_entry" | "retrieval_query",
+  path: string,
+  message: string,
+): SubbrainValidationError {
+  return new SubbrainValidationError(kind, [{ path, message }]);
+}
+
+function localDate(date: Date): string {
+  return [date.getFullYear(), padded(date.getMonth() + 1), padded(date.getDate())].join("-");
+}
+
+function localTimestamp(date: Date): string {
+  const time = [padded(date.getHours()), padded(date.getMinutes()), padded(date.getSeconds())].join(
+    ":",
+  );
+  const offset = -date.getTimezoneOffset();
+  const sign = offset >= 0 ? "+" : "-";
+  return `${localDate(date)}T${time}${sign}${padded(Math.floor(Math.abs(offset) / 60))}:${padded(
+    Math.abs(offset) % 60,
+  )}`;
+}
+
+function padded(value: number): string {
+  return String(value).padStart(2, "0");
 }
 
 async function subbrainJson<T>(context: Context, run: () => Promise<T> | T) {
@@ -194,15 +284,16 @@ ${subbrainResults()}
 
 function subbrainToolbar(): string {
   return `<section class="toolbar"><h1>SubBrain</h1><div>
-<button data-seed="mother-case">어머니 사례</button>
-<button data-seed="self-insight">자기이해</button>
-<button data-seed="all">전체</button>
+<button data-seed="mother-case">초기화 후 어머니 사례</button>
+<button data-seed="self-insight">초기화 후 자기이해</button>
+<button data-seed="all">초기화 후 전체</button>
 </div></section>`;
 }
 
 function subbrainQuery(): string {
   return `<section class="query">
 <textarea id="question">열무 가시에 찔린 뒤 왼쪽 검지가 하얘지고 감각이 둔한데 왜 그럴까?</textarea>
+<label>기준 날짜 <input id="reference-date" type="date" value="2026-06-27" /></label>
 <button id="ask">질문하기</button>
 </section>`;
 }
@@ -216,16 +307,15 @@ function subbrainEntryForm(): string {
 <button data-entry-example="오늘 목이 불편하고 피곤해서 집중이 잘 안 됐다.">컨디션</button>
 <button data-entry-example="왼쪽 손가락 감각이 둔해서 걱정됐다.">증상</button>
 </div>
-<textarea id="entry-text">오늘 팀장과 1:1 후 또 방향이 바뀌어서 답답했다.</textarea>
 <div id="entry-preview" class="list empty">저장하면 추출된 기억이 표시됩니다.</div>
 </section>`;
 }
 
 function subbrainResults(): string {
-  return `<section class="status" id="status">어머니 사례 fixture를 불러온 뒤 질문하세요.</section>
+  return `<section class="status" id="status">이 로컬 데모는 진단이나 결론이 아니라 개인 기록 연결 후보만 보여줍니다.</section>
 <section class="result-grid">
-<section class="wide"><h2>판단 요약</h2><div id="decision" class="list empty">아직 결과가 없습니다.</div></section>
-<section><h2>가능한 연결 후보</h2><div id="candidates" class="list empty">아직 결과가 없습니다.</div></section>
+<section class="wide"><h2>기록 연결 요약</h2><div id="decision" class="list empty">아직 결과가 없습니다.</div></section>
+<section><h2>확인 후보</h2><div id="candidates" class="list empty">아직 결과가 없습니다.</div></section>
 <section><h2>근거 기억</h2><div id="evidence" class="list empty">아직 결과가 없습니다.</div></section>
 <section><h2>불확실성</h2><div id="uncertainty" class="list empty">아직 결과가 없습니다.</div></section>
 <section><h2>다음 확인 질문</h2><div id="questions" class="list empty">아직 결과가 없습니다.</div></section>
@@ -250,29 +340,28 @@ function subbrainScript(): string {
 function subbrainScriptState(): string[] {
   return [
     'const examples={"mother-case":"열무 가시에 찔린 뒤 왼쪽 검지가 하얘지고 감각이 둔한데 왜 그럴까?","self-insight":"내가 왜 요즘 이직 생각을 자주 하지?",all:"내가 왜 요즘 이직 생각을 자주 하지?"};',
-    'const cases={"mother-case":"finger-cause","self-insight":"job-change-pattern",all:"job-change-pattern"};',
-    "let activeFixture='mother-case';",
+    'const referenceDates={"mother-case":"2026-06-27","self-insight":"2026-06-27",all:"2026-06-27"};',
     "const $=(id)=>document.querySelector(id);",
     "const status=$('#status');",
     "document.querySelectorAll('[data-seed]').forEach((button)=>button.onclick=async()=>seed(button.dataset.seed));",
     "document.querySelectorAll('[data-entry-example]').forEach((button)=>button.onclick=()=>setEntryText(button.dataset.entryExample));",
-    "$('#quick-entry').oninput=()=>{$('#entry-text').value=$('#quick-entry').value};",
     "$('#save-entry').onclick=async()=>saveEntry();",
     "$('#ask').onclick=async()=>askQuestion();",
+    "void loadEvents();",
   ];
 }
 
 function subbrainScriptActions(): string[] {
   return [
-    "async function seed(fixture){activeFixture=fixture;status.textContent='fixture를 불러오는 중입니다.';$('#question').value=examples[fixture];const response=await postJson('/subbrain/seed',{fixture,confirmReset:true});const body=await response.json();status.textContent=response.ok?body.fixture+' fixture를 불러왔습니다.':body.error;clearResults();await loadEvents()}",
-    "async function saveEntry(){status.textContent='기록을 저장하는 중입니다.';const response=await postJson('/subbrain/entries',{text:entryText()});const body=await response.json();status.textContent=response.ok?'기억으로 저장했습니다.':body.error;if(response.ok)renderEntryPreview(body.events);await loadEvents()}",
-    "async function askQuestion(){status.textContent='관련 기억을 찾는 중입니다.';const question=$('#question').value;const body=question===examples[activeFixture]?{question,caseId:cases[activeFixture]}:{question};const response=await postJson('/subbrain/ask',body);const data=await response.json();if(!response.ok){status.textContent=data.error;return}render(data)}",
+    "async function seed(fixture){if(!confirm('현재 저장된 데모 기억을 지우고 fixture를 다시 불러올까요?'))return;status.textContent='fixture를 불러오는 중입니다.';$('#question').value=examples[fixture];$('#reference-date').value=referenceDates[fixture];const response=await postJson('/subbrain/seed',{fixture,confirmReset:true});const body=await response.json();status.textContent=response.ok?body.fixture+' fixture를 불러왔습니다.':body.error;clearResults();await loadEvents()}",
+    "async function saveEntry(){status.textContent='기록을 저장하는 중입니다.';const response=await postJson('/subbrain/entries',{text:entryText()});const body=await response.json();status.textContent=response.ok?'기억으로 저장했습니다. 연결 '+body.links.length+'개를 만들었습니다.':body.error;if(response.ok){renderEntryPreview(body.events);$('#reference-date').value=body.entry.recordedAt.slice(0,10)}await loadEvents()}",
+    "async function askQuestion(){status.textContent='관련 기억을 찾는 중입니다.';const question=$('#question').value;const referenceDate=$('#reference-date').value;const response=await postJson('/subbrain/ask',{question,referenceDate});const data=await response.json();if(!response.ok){status.textContent=data.error;return}render(data);await loadEvents()}",
     "async function postJson(url,body){return fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)})}",
     "async function loadEvents(){const response=await fetch('/subbrain/events');renderMemories((await response.json()).events)}",
-    "function entryText(){return ($('#quick-entry').value||$('#entry-text').value).trim()}",
-    "function setEntryText(text){$('#quick-entry').value=text;$('#entry-text').value=text}",
+    "function entryText(){return $('#quick-entry').value.trim()}",
+    "function setEntryText(text){$('#quick-entry').value=text}",
     "function clearResults(){for(const id of ['#decision','#candidates','#evidence','#uncertainty','#questions']){$(id).className='list empty';$(id).textContent='질문하면 결과가 표시됩니다.'}}",
-    "function render(data){status.textContent=data.answer.summary;renderDecision(data);renderCandidates(data.answer.causalCandidates,data.context.retrievedMemories);renderEvidence(data.answer.evidence,data.context.retrievedMemories);renderList('#uncertainty',data.answer.uncertainty);renderList('#questions',data.answer.suggestedQuestions);renderMemories(data.context.retrievedMemories)}",
+    "function render(data){status.textContent=data.answer.summary;renderDecision(data);renderCandidates(data.answer.causalCandidates,data.context.retrievedMemories);renderEvidence(data.answer.evidence,data.context.retrievedMemories);renderList('#uncertainty',data.answer.uncertainty);renderList('#questions',data.answer.suggestedQuestions)}",
   ];
 }
 
@@ -286,7 +375,7 @@ function subbrainScriptSummaryRenderers(): string[] {
 
 function subbrainScriptListRenderers(): string[] {
   return [
-    "function renderEvidence(items,memories){$('#evidence').className='list';$('#evidence').innerHTML=items.map((item)=>{const memory=findMemory(memories,item.eventId);return '<div class=\"item\"><strong>'+escapeHtml(item.summary)+'</strong>'+badges(memory,false)+'<div class=\"meta\">'+escapeHtml(item.occurredAt)+' · '+escapeHtml(item.eventId)+'</div>'+scoreLine(memory)+'<div class=\"reason\">매칭 이유: '+escapeHtml(item.reasons.join(', '))+'</div></div>'}).join('')||'근거 기억이 없습니다.'}",
+    "function renderEvidence(items,memories){$('#evidence').className='list';$('#evidence').innerHTML=items.map((item)=>{const memory=findMemory(memories,item.eventId);return '<div class=\"item\"><strong>'+escapeHtml(item.summary)+'</strong>'+badges(memory,false)+'<div class=\"meta\">'+escapeHtml(item.occurredAt)+' · '+escapeHtml(item.eventId)+' · '+escapeHtml(item.sourceEntryId)+'</div>'+scoreLine(memory)+'<div class=\"reason\">매칭 이유: '+escapeHtml(item.reasons.join(', '))+'</div></div>'}).join('')||'근거 기억이 없습니다.'}",
     "function renderEntryPreview(items){$('#entry-preview').className='list';$('#entry-preview').innerHTML=items.map((item)=>'<div class=\"item\"><strong>'+escapeHtml(item.summary)+'</strong>'+eventBadges(item)+'<div class=\"meta\">'+escapeHtml(item.occurredAt)+' · '+escapeHtml(item.id)+'</div><div class=\"reason\">'+eventDetails(item)+'</div></div>').join('')||'추출된 기억이 없습니다.'}",
     "function renderMemories(items){$('#memories').className='list';$('#memories').innerHTML=items.map((item)=>{const memory=normalizeMemory(item);return '<div class=\"item\"><strong>'+escapeHtml(memory.event.summary)+'</strong>'+badges(memory,false)+'<div class=\"meta\">'+escapeHtml(memory.event.occurredAt)+' · '+escapeHtml(memory.event.id)+'</div>'+scoreLine(memory)+'<div class=\"meta\">'+escapeHtml(memory.event.topics.join(', '))+'</div></div>'}).join('')||'저장된 기억이 없습니다.'}",
     "function scoreLine(memory){if(!memory||typeof memory.score!=='number')return '';const width=Math.max(0,Math.min(100,Math.round(memory.score*10)));return '<div class=\"meta score\">점수 '+memory.score.toFixed(1)+'</div><div class=\"meter\"><span style=\"width:'+width+'%\"></span></div><div class=\"reason\">매칭 이유: '+escapeHtml(memory.reasons.join(', ')||'저장된 기억 목록')+'</div>'}",
@@ -299,7 +388,7 @@ function subbrainScriptUtilities(): string[] {
     "function findMemory(memories,eventId){return memories.find((memory)=>memory.event.id===eventId)}",
     "function normalizeMemory(item){return item.event?item:{event:item,score:null,reasons:[],forgotten:false}}",
     "function eventBadges(item){return [...item.topics,...item.emotions].slice(0,4).map((value)=>'<span class=\"badge\">'+escapeHtml(value)+'</span>').join('')}",
-    "function eventDetails(item){const attrs=item.attributes.map((attr)=>attr.name+': '+attr.value);const entities=item.entities.map((entity)=>entity.name);return escapeHtml([...attrs,...entities].join(', ')||'추가 단서 없음')}",
+    "function eventDetails(item){const attrs=item.attributes.map((attr)=>attr.type+': '+attr.value);const entities=item.entities.map((entity)=>entity.name);return escapeHtml([...attrs,...entities].join(', ')||'추가 단서 없음')}",
     "function renderList(id,items){$(id).className='list';$(id).innerHTML=items.map((item)=>'<div class=\"item\">'+escapeHtml(item)+'</div>').join('')||'표시할 내용이 없습니다.'}",
     "function escapeHtml(value){return String(value).replace(/[&<>\"]/g,(char)=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[char]))}",
   ];
