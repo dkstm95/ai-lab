@@ -9,6 +9,7 @@ const requiredFiles = [
   "docs/development-guide.md",
   "docs/testing-guide.md",
   "docs/contribution-guide.md",
+  ".github/pull_request_template.md",
   "package.json",
 ];
 
@@ -36,6 +37,7 @@ const docs = {
   development: read("docs/development-guide.md"),
   testing: read("docs/testing-guide.md"),
   contribution: read("docs/contribution-guide.md"),
+  pullRequestTemplate: read(".github/pull_request_template.md"),
   packageJson: JSON.parse(read("package.json")),
 };
 
@@ -48,7 +50,6 @@ for (const script of requiredRootScripts) {
 }
 
 assert("coverage" in docs.packageJson.scripts, "Missing root package script: coverage");
-
 for (const command of [
   "pnpm cli --help",
   "pnpm cli run hello",
@@ -107,6 +108,17 @@ assert(
   "testing-guide.md must describe duplicate coverage policy",
 );
 
+for (const phrase of [
+  "DiffScope",
+  "packages/agent-runtime",
+  "consumer rather than a second implementation",
+]) {
+  assert(
+    docs.systemDesign.includes(phrase),
+    `system-design.md must describe the external DiffScope boundary: ${phrase}`,
+  );
+}
+
 for (const file of [
   "README.md",
   "README.ko.md",
@@ -128,11 +140,42 @@ assert(
   docs.development.includes("docs/contribution-guide.md"),
   "development-guide.md must point to contribution-guide.md",
 );
-for (const phrase of ["Spring Framework", "55 characters", "Pull Request Rules"]) {
+for (const phrase of [
+  "Spring Framework",
+  "55 characters",
+  "Pull Request Rules",
+  "Understanding` section",
+]) {
   assert(docs.contribution.includes(phrase), `contribution-guide.md must include: ${phrase}`);
 }
+for (const phrase of [
+  "AI-Assisted Change Handoff",
+  "correctness evidence",
+  "active participation check",
+]) {
+  assert(docs.development.includes(phrase), `development-guide.md must include: ${phrase}`);
+}
+for (const phrase of ["## Understanding", "Behavior path", "Active reviewer check"]) {
+  assert(
+    docs.pullRequestTemplate.includes(phrase),
+    `pull request template must include: ${phrase}`,
+  );
+}
+assert(
+  docs.agents.includes("AI 코드 변경 이해 인계"),
+  "AGENTS.md must route AI change understanding work",
+);
 assert(docs.readme.includes("README.ko.md"), "README.md must link README.ko.md");
 assert(docs.readmeKo.includes("README.md"), "README.ko.md must link README.md");
+
+for (const phrase of [
+  "https://github.com/dkstm95/diff-scope",
+  "explanation.md",
+  "artifact.json",
+  "index.html",
+]) {
+  assert(docs.readme.includes(phrase), `README.md must describe external DiffScope: ${phrase}`);
+}
 
 for (const file of collectMarkdownFiles(".")) {
   const lineCount = read(file).trimEnd().split("\n").length;

@@ -53,6 +53,14 @@ protocol -> no internal deps
 
 `dependency-cruiser` is used instead of Nx because this lab needs lightweight dependency boundary checks, not a full monorepo task framework.
 
+## External Change Understanding
+
+[DiffScope](https://github.com/dkstm95/diff-scope) owns the reusable explanation,
+quiz, and offline microworld workflow. It is intentionally maintained outside
+this monorepo, so ai-lab is a consumer rather than a second implementation. The
+tool runs through the active Codex subscription session and is not part of the
+`packages/agent-runtime` dependency graph or its fake-provider test path.
+
 ## Code Shape
 
 - Reduce branches, mutable state, exception handling, and duplicate tests.

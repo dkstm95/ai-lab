@@ -47,6 +47,21 @@ packages/local-tools     agent runtime이 호출할 수 있는 local tool
 docs/                    설계, 개발, 테스트 가이드
 ```
 
+## DiffScope
+
+AI 코드 작업 하나가 완료되면 변경을 승인하거나 commit하기 전에 외부
+[DiffScope](https://github.com/dkstm95/diff-scope) plugin의 `$diff`를 사용한다.
+현재 로컬 working-tree 변경을 세 파일로 만든다.
+
+- `explanation.md`: 근거와 before-to-after 흐름을 담은 설명 문서
+- `artifact.json`: 검증된 provider-neutral `ArtifactV1` 데이터
+- `index.html`: offline 자동 채점 퀴즈와 인터랙티브 microworld
+
+Alpha는 활성 Codex 구독 session을 사용하고 완료된 한 작업 단위의
+`HEAD -> working tree`만 지원한다. DiffScope는 별도 공개 저장소가 SSOT이므로
+ai-lab도 다른 project와 같은 공개 도구를 소비한다. fake provider를 쓰는
+`packages/agent-runtime`에는 포함되지 않는다.
+
 ## LLM Wiki 흐름
 
 LLM Wiki는 agent 내부 tool로 관리하지만, 승인된 wiki page는 사람이 다시 읽고 질문할 수 있는 지식이다. Agent는 `packages/local-tools`를 통해 source 등록, ingest/query/evolve task packet 생성, 재사용 답변 파일링, 검증된 wiki update 적용, lint, run 기록을 수행한다. 사람이 직접 쓰는 wiki CLI는 두지 않는다.

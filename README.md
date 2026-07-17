@@ -47,6 +47,22 @@ packages/local-tools     tools callable by the agent runtime
 docs/                    system, development, and testing guides
 ```
 
+## DiffScope
+
+After an AI-assisted coding task is complete, use the external
+[DiffScope](https://github.com/dkstm95/diff-scope) plugin before approving or
+committing the change. Its `$diff` skill turns the current local working-tree
+change into three files:
+
+- `explanation.md`: an evidence-based before-to-after explanation;
+- `artifact.json`: validated provider-neutral `ArtifactV1` data;
+- `index.html`: an offline auto-scored quiz and interactive microworld.
+
+The alpha uses the active Codex subscription session and supports only
+`HEAD -> working tree` for one completed work unit. DiffScope is maintained in
+its own repository so ai-lab consumes the same public tool as any other project;
+it is not part of `packages/agent-runtime` or its fake provider.
+
 ## Working With LLM Wiki
 
 LLM Wiki is maintained through agent-internal tools, but approved wiki pages are human-readable knowledge. Agents use `packages/local-tools` to register sources, prepare ingest/query/evolve task packets, file reusable answers, apply validated wiki updates, lint the wiki, and record runs. Wiki lint checks source-backed claims, index drift, review gates, stale review dates, and duplicate accepted claim/source pairs. There is no human-facing wiki CLI.

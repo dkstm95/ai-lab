@@ -38,6 +38,8 @@ Validation: pnpm check
 - List user-visible or architecture-level changes.
 - Include validation commands and their result.
 - Mention documentation updates or say none were needed.
+- Complete the `Understanding` section for non-trivial AI-assisted changes using
+  the handoff rules in `docs/development-guide.md`.
 - Keep unrelated cleanup out of the PR.
 - Push review fixes to the same branch.
 
@@ -47,6 +49,8 @@ Validation: pnpm check
 - Prefer discrete actionable comments over broad style feedback.
 - Ask for missing tests when behavior changes.
 - Ask for documentation updates when commands, structure, or workflows change.
+- Treat automated checks as correctness evidence, then use the `Understanding`
+  section's active reviewer check to confirm the change can guide the next decision.
 
 ## References
 

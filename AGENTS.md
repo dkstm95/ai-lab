@@ -11,7 +11,7 @@
 
 - 프로젝트 목적, 빠른 실행, CLI/service 사용법: `README.md`, `README.ko.md`
 - monorepo 구조, 패키지 책임, 의존 방향, provider 방식: `docs/system-design.md`
-- 설치, 실행, 검증, Git hook 기준: `docs/development-guide.md`
+- 설치, 실행, 검증, Git hook, AI 코드 변경 이해 인계 기준: `docs/development-guide.md`
 - 테스트 작성과 리뷰 기준: `docs/testing-guide.md`
 - commit, PR, review 기준: `docs/contribution-guide.md`
 - 작업 회고, memory 후보, 승인 기반 자가진화 정책: `docs/self-evolution-guide.md`
