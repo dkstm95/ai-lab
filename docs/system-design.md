@@ -53,13 +53,36 @@ protocol -> no internal deps
 
 `dependency-cruiser` is used instead of Nx because this lab needs lightweight dependency boundary checks, not a full monorepo task framework.
 
-## External Change Understanding
+## External Intent and Change Understanding
 
-[DiffScope](https://github.com/dkstm95/diff-scope) owns the reusable explanation,
-quiz, and offline microworld workflow. It is intentionally maintained outside
+[Hope](https://github.com/dkstm95/hope) owns the reusable pre-change alignment
+and post-change understanding workflow. It is intentionally maintained outside
 this monorepo, so ai-lab is a consumer rather than a second implementation. The
 tool runs through the active Codex subscription session and is not part of the
 `packages/agent-runtime` dependency graph or its fake-provider test path.
+
+Hope exposes one user-visible case with immutable internal checkpoints and
+disposable views:
+
+```text
+approved intent revision -> exact change snapshot -> bound review bundle
+        $hope:align                  $hope:diff
+```
+
+`$hope:align` records goals, decisions, constraints, non-goals, and expected
+scenarios before implementation. `$hope:diff` consumes that revision as read-only
+context, binds explanation claims and active understanding checks to an exact
+change fingerprint, and identifies fulfilled intent or deviations. Every
+deviation remains a user-review item; the artifact cannot approve it. Findings
+may lead to a code change or a new intent revision from a clean Git boundary,
+but never mutate prior approval. `$hope:diff` remains usable without prior alignment.
+
+The private bundle is retained locally through review and merge, but generated
+Hope output is not committed by default and the entire bundle is discarded
+after merge unless explicitly pinned. Only non-reconstructible, durable
+knowledge is promoted to an existing owner such as tests, types, assertions,
+comments, ADRs, design docs, runbooks, commits, or pull requests. This boundary
+reduces cognitive debt without creating a parallel documentation system.
 
 ## Code Shape
 

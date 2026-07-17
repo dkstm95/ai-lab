@@ -17,4 +17,4 @@
 
 ## Playbooks
 
-- [AI Change Understanding Loop](pages/playbooks/ai-change-understanding-loop.md) - portable explanation, quiz, and offline microworld workflow for understanding AI-assisted code changes.
+- [AI Change Understanding Loop](pages/playbooks/ai-change-understanding-loop.md) - Hope workflow for aligning intent before implementation and actively understanding the exact change afterward.

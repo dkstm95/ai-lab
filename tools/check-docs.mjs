@@ -109,13 +109,19 @@ assert(
 );
 
 for (const phrase of [
-  "DiffScope",
+  "Hope",
+  "$hope:align",
+  "$hope:diff",
   "packages/agent-runtime",
   "consumer rather than a second implementation",
+  "read-only",
+  "user-review item",
+  "clean Git boundary",
+  "not committed by default",
 ]) {
   assert(
     docs.systemDesign.includes(phrase),
-    `system-design.md must describe the external DiffScope boundary: ${phrase}`,
+    `system-design.md must describe the external Hope boundary: ${phrase}`,
   );
 }
 
@@ -152,6 +158,9 @@ for (const phrase of [
   "AI-Assisted Change Handoff",
   "correctness evidence",
   "active participation check",
+  "immutable intent revision",
+  "next clean boundary",
+  "entire generated bundle",
 ]) {
   assert(docs.development.includes(phrase), `development-guide.md must include: ${phrase}`);
 }
@@ -169,12 +178,12 @@ assert(docs.readme.includes("README.ko.md"), "README.md must link README.ko.md")
 assert(docs.readmeKo.includes("README.md"), "README.ko.md must link README.md");
 
 for (const phrase of [
-  "https://github.com/dkstm95/diff-scope",
-  "explanation.md",
-  "artifact.json",
-  "index.html",
+  "https://github.com/dkstm95/hope",
+  "$hope:align",
+  "$hope:diff",
+  "Do not commit generated bundles by default",
 ]) {
-  assert(docs.readme.includes(phrase), `README.md must describe external DiffScope: ${phrase}`);
+  assert(docs.readme.includes(phrase), `README.md must describe external Hope: ${phrase}`);
 }
 
 for (const file of collectMarkdownFiles(".")) {

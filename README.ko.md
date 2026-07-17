@@ -47,20 +47,27 @@ packages/local-tools     agent runtime이 호출할 수 있는 local tool
 docs/                    설계, 개발, 테스트 가이드
 ```
 
-## DiffScope
+## Hope
 
-AI 코드 작업 하나가 완료되면 변경을 승인하거나 commit하기 전에 외부
-[DiffScope](https://github.com/dkstm95/diff-scope) plugin의 `$diff`를 사용한다.
-현재 로컬 working-tree 변경을 세 파일로 만든다.
+외부 [Hope](https://github.com/dkstm95/hope) plugin으로 AI 코드 작업 전후의
+사람 의도와 이해를 연결한다.
 
-- `explanation.md`: 근거와 before-to-after 흐름을 담은 설명 문서
-- `artifact.json`: 검증된 provider-neutral `ArtifactV1` 데이터
-- `index.html`: offline 자동 채점 퀴즈와 인터랙티브 microworld
+- `$hope:align`은 구현 전에 해결되지 않은 판단을 드러내고 사용자가 승인한
+  의도를 변경 불가능한 revision으로 고정한다.
+- `$hope:diff`는 정확한 로컬 변경에 review를 묶고, 승인된 의도가 있으면 실제
+  구현과 비교하며, 근거 기반 설명·자동 채점 퀴즈·인터랙티브 microworld를
+  만든다.
 
-Alpha는 활성 Codex 구독 session을 사용하고 완료된 한 작업 단위의
-`HEAD -> working tree`만 지원한다. DiffScope는 별도 공개 저장소가 SSOT이므로
-ai-lab도 다른 project와 같은 공개 도구를 소비한다. fake provider를 쓰는
-`packages/agent-runtime`에는 포함되지 않는다.
+관계의 방향은 `$hope:align`에서 `$hope:diff`로 향한다. `$hope:diff`가 코드 결함이나 의도
+변경 필요성을 드러낼 수는 있지만 승인된 의도를 몰래 고치지 않는다. 의도를
+바꾸려면 사용자가 새 revision을 승인해야 한다. `$hope:align` 없이 `$hope:diff`만
+사용할 수도 있다.
+
+Hope의 비공개 작업 bundle은 review와 merge가 끝날 때까지 로컬에 유지한다.
+생성 bundle은 기본적으로 commit하지 않고, 명시적으로 보존하지 않았다면 merge
+후 전체를 폐기한다. 오래 남길 지식만 test, 코드 주석, ADR, runbook, commit,
+pull request처럼 이미 책임이 정해진 위치로 승격한다. Alpha는 활성 Codex 구독
+session을 사용하며 `packages/agent-runtime`과 그 fake provider 밖에서 동작한다.
 
 ## LLM Wiki 흐름
 

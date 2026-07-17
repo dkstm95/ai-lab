@@ -23,3 +23,5 @@
 ## [2026-07-16T15:25:04.000Z] update | implement portable change understanding plugin workflow
 
 ## [2026-07-17T12:00:00.000Z] update | extract DiffScope as the external reusable change-understanding tool
+
+## [2026-07-17T15:00:00.000Z] update | connect Hope intent alignment, diff understanding, and selective retention

@@ -47,21 +47,27 @@ packages/local-tools     tools callable by the agent runtime
 docs/                    system, development, and testing guides
 ```
 
-## DiffScope
+## Hope
 
-After an AI-assisted coding task is complete, use the external
-[DiffScope](https://github.com/dkstm95/diff-scope) plugin before approving or
-committing the change. Its `$diff` skill turns the current local working-tree
-change into three files:
+Use the external [Hope](https://github.com/dkstm95/hope) plugin to keep human
+intent and understanding connected across an AI-assisted coding task:
 
-- `explanation.md`: an evidence-based before-to-after explanation;
-- `artifact.json`: validated provider-neutral `ArtifactV1` data;
-- `index.html`: an offline auto-scored quiz and interactive microworld.
+- `$hope:align` surfaces unresolved decisions before implementation and freezes the
+  user's approved intent as an immutable revision.
+- `$hope:diff` binds its review to the exact local change, compares it with that
+  approved intent when available, and creates an evidence-based explanation,
+  auto-scored quiz, and interactive microworld.
 
-The alpha uses the active Codex subscription session and supports only
-`HEAD -> working tree` for one completed work unit. DiffScope is maintained in
-its own repository so ai-lab consumes the same public tool as any other project;
-it is not part of `packages/agent-runtime` or its fake provider.
+The relationship is directional: `$hope:align` informs `$hope:diff`; `$hope:diff` may expose a
+code defect or the need for a user-approved new intent revision, but it never
+silently rewrites approved intent. `$hope:diff` also works without a prior `$hope:align`.
+
+Keep Hope's private working bundle locally through review and merge.
+Do not commit generated bundles by default; discard the entire bundle after
+merge unless it is explicitly pinned. Promote only durable knowledge to its
+existing owner, such as a test, code comment, ADR, runbook, commit, or pull
+request. The alpha uses the active Codex subscription session and runs outside
+`packages/agent-runtime` and its fake provider.
 
 ## Working With LLM Wiki
 

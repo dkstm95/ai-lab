@@ -40,21 +40,48 @@ Useful environment variables:
 
 API providers and subscription/external runner providers are intentionally excluded from the default verification path.
 
-## DiffScope
+## Hope
 
-Use the external [DiffScope](https://github.com/dkstm95/diff-scope) `$diff`
-skill after one AI-assisted local code task is complete and before approval or
-commit. It uses the active Codex subscription session and renders:
+Use the external [Hope](https://github.com/dkstm95/hope) skills around a
+non-trivial AI-assisted task. The active Codex session processes in-scope code.
 
-- `explanation.md` for the causal before-to-after model;
-- `artifact.json` for the portable validated contract;
-- `index.html` for the offline quiz and interactive microworld.
+Before implementation, run `$hope:align` to:
 
-The alpha supports only one completed `HEAD -> working tree` work unit. The
-bundle does not prove understanding, so review its claims and complete the
-active check. Repository contents in scope are processed by the signed-in Codex
-service. DiffScope owns its own deterministic tests and release lifecycle; do
-not duplicate its runtime inside ai-lab.
+- state the goal, observable behavior, constraints, non-goals, and expected
+  scenarios;
+- surface every unresolved decision that genuinely needs the user's judgment,
+  without an arbitrary card limit;
+- freeze the approved result as an immutable intent revision.
+
+After one local work unit is complete, run `$hope:diff` to:
+
+- bind the review to the exact change fingerprint;
+- compare the implementation with the approved intent when one exists;
+- distinguish fulfilled intent, implementation defects, deviations that need
+  user review, residual risks, and unknowns;
+- render the evidence-based explanation, auto-scored quiz, and interactive
+  microworld used for active understanding.
+
+`$hope:align` affects `$hope:diff`, but `$hope:diff` cannot rewrite approved intent. If the
+intent should change, return the decision to the user and begin a new revision
+from the next clean boundary. Until then, `$hope:diff` reports the mismatch against
+the existing revision. Code changes make a review stale. `$hope:diff` also works
+without prior alignment by deriving its model from the change context.
+
+Keep the private bundle through review and merge for resume or handoff; do not
+commit it. After merge, discard the entire generated bundle, including
+`artifact.json`, explanations, quiz state, and microworld output, unless the user
+pins it for audit or education. Promote durable knowledge to its owner instead:
+
+- behavioral contracts and invariants belong in tests, types, assertions, or
+  fixtures;
+- local non-obvious rationale belongs near the code;
+- architecture decisions belong in an existing ADR or design document;
+- operational constraints belong in a runbook;
+- small change-specific rationale belongs in the commit or pull request.
+
+The bundle does not prove understanding, so review its claims and complete the
+active check. Hope owns its tests and runtime outside ai-lab.
 
 ## Tooling Notes
 
@@ -99,8 +126,10 @@ The active check should let the reviewer explain an invariant, predict a
 consequence, or identify the next safe change. `pnpm check` can prove repository
 constraints passed, but it cannot prove that this understanding exists.
 
-Keep one-off diff explanations in the task or pull request. Promote only stable
-decisions, repeated failures, and reusable procedures to the LLM Wiki.
+Keep one-off Hope explanations in the private task bundle or pull request rather
+than committing a parallel documentation tree. Promote only stable decisions,
+repeated failures, and reusable procedures to the existing tests, code, design
+docs, runbooks, or LLM Wiki that already own that knowledge.
 
 ## References
 
