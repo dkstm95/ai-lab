@@ -15,3 +15,7 @@
 ## [2026-06-19T01:00:00.000Z] update | add review, dedup, drift controls to wiki operating model
 
 ## [2026-07-15T03:54:12.000Z] update | add memory candidate scope failure and approved product preferences
+
+## [2026-07-16T14:48:48.000Z] source | Understanding AI-generated Code | understanding-ai-generated-code
+
+## [2026-07-19T00:00:00.000Z] update | add source summary and tool-independent cognitive debt guidance
