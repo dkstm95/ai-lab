@@ -4,6 +4,7 @@
 
 - [Advice for New Principal Tech ICs](pages/sources/advice-for-new-principal-tech-ics.md) - source summary for principal IC leverage, influence, and sustainable breadth work.
 - [Karpathy LLM Wiki](pages/sources/karpathy-llm-wiki.md) - source summary for the agent-maintained markdown wiki pattern and reliability comments.
+- [Understanding AI-generated Code](pages/sources/understanding-ai-generated-code.md) - source summary for restoring human understanding after agent-authored changes.
 
 ## Concepts
 
