@@ -11,7 +11,7 @@
   },
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts",
-    "test": "vitest run test",
+    "test": "vitest run --root ../.. packages/local-tools/test/local-tools.test.ts",
     "typecheck": "tsc -b"
   },
   "dependencies": {

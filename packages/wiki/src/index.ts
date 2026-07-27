@@ -1,8 +1,27 @@
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
-import { copyFile, mkdir, open, readFile, readdir, stat, writeFile } from "node:fs/promises";
-import { dirname, extname, join, normalize, relative, resolve } from "node:path";
+import { lstat, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { extname, join, posix, relative } from "node:path";
 import { type Workspace, slugify } from "@ai-lab/workspace";
+import {
+  WikiCandidateValidationError,
+  type WikiPathExpectation,
+  WikiSourceReferenceError,
+  type WikiTransactionFile,
+  assertWikiPath,
+  hashWikiFiles,
+  previewWikiFiles,
+  promoteWikiFiles,
+  readWorkspaceSource,
+  resolveWikiSource,
+  sha256,
+  withWikiWriteLock,
+} from "./transaction.js";
+
+export {
+  WikiCandidateValidationError,
+  WikiRecoveryRequiredError,
+  WikiWriteConflictError,
+} from "./transaction.js";
 
 export const wikiPageKinds = [
   "concept",
@@ -80,12 +99,8 @@ export interface WikiUpdateFile {
   readonly content: string;
 }
 
-export interface WikiUpdate {
-  readonly files: readonly WikiUpdateFile[];
-  readonly note?: string;
-}
-
 export interface WikiApplyResult {
+  readonly proposalId: string;
   readonly files: readonly string[];
   readonly lint: WikiLintReport;
 }
@@ -103,18 +118,50 @@ export interface WikiRun {
   readonly recordedAt: string;
 }
 
-export interface FileWikiAnswerInput {
+export interface WikiAcceptedClaim {
+  readonly text: string;
+  readonly source: string;
+}
+
+export interface WikiAnswerProposalInput {
   readonly question: string;
-  readonly answer: string;
-  readonly sources: readonly string[];
+  readonly summary: string;
+  readonly acceptedClaims: readonly WikiAcceptedClaim[];
   readonly title?: string;
+}
+
+export interface WikiProposal {
+  readonly id: string;
+  readonly digest: string;
+  readonly kind: "answer";
+  readonly note: string;
+  readonly files: readonly WikiUpdateFile[];
+  readonly baseHashes: Readonly<Record<string, string | null>>;
+  readonly sourceHashes: Readonly<Record<string, string>>;
+  readonly diagnostics: WikiLintReport;
+}
+
+export interface WikiApproval {
+  readonly proposalId: string;
+  readonly digest: string;
+  readonly accepted: true;
+  readonly reviewedBy: string;
+  readonly reviewedAt: string;
 }
 
 interface WikiAnswerDraft {
   readonly path: string;
   readonly page: string;
-  readonly input: FileWikiAnswerInput;
-  readonly now: Date;
+  readonly input: WikiAnswerProposalInput;
+}
+
+interface WikiProposalContent {
+  readonly kind: "answer";
+  readonly note: string;
+  readonly files: readonly WikiUpdateFile[];
+  readonly baseHashes: Readonly<Record<string, string | null>>;
+  readonly sourceHashes: Readonly<Record<string, string>>;
+  readonly diagnostics: WikiLintReport;
 }
 
 const pageDirs = [
@@ -130,12 +177,18 @@ const pageDirs = [
 ];
 
 export async function initWiki(workspace: Workspace): Promise<WikiSnapshot> {
+  return withWikiWriteLock(workspace, initWikiUnlocked);
+}
+
+async function initWikiUnlocked(workspace: Workspace): Promise<WikiSnapshot> {
+  await assertWikiLayout(workspace, true);
   await Promise.all(wikiDirectories(workspace).map((path) => mkdir(path, { recursive: true })));
   await Promise.all([
     writeSeedFile(wikiPath(workspace, "schema.md"), schemaSeed()),
     writeSeedFile(wikiPath(workspace, "index.md"), "# Wiki Index\n"),
     writeSeedFile(wikiPath(workspace, "log.md"), "# Wiki Log\n"),
   ]);
+  await assertWikiLayout(workspace, false);
   return { root: wikiPath(workspace) };
 }
 
@@ -144,16 +197,19 @@ export async function addWikiSource(
   input: AddWikiSourceInput,
   now: Date = new Date(),
 ): Promise<WikiSource> {
-  await initWiki(workspace);
-  const content = await readFile(input.path);
-  const source = wikiSource(workspace, input, sourceId(input.title, content), now);
-  await copyFile(input.path, source.path, constants.COPYFILE_EXCL);
-  await appendLog(workspace, now, `source | ${input.title} | ${source.id}`);
-  return source;
+  const snapshot = { input: structuredClone(input), now: new Date(now.getTime()) };
+  return withWikiWriteLock(workspace, (locked) =>
+    addWikiSourceUnlocked(locked, snapshot.input, snapshot.now),
+  );
 }
 
 export async function listWikiPages(workspace: Workspace): Promise<WikiPage[]> {
-  return Promise.all((await markdownFiles(wikiPath(workspace, "pages"))).map(readWikiPageFile));
+  await assertWikiPath(workspace, { path: "pages", type: "directory", allowMissing: false });
+  const files = await markdownFileSet(wikiPath(workspace, "pages"));
+  if (files.issues.length > 0) {
+    throw new Error(files.issues[0]?.message);
+  }
+  return Promise.all(files.paths.map(readWikiPageFile));
 }
 
 export async function readWikiPage(workspace: Workspace, slug: string): Promise<WikiPage> {
@@ -182,7 +238,10 @@ export async function prepareWikiIngest(
 ): Promise<WikiTaskPacket> {
   const sourcePath = await findSourcePath(workspace, sourceId);
   const contextFiles = ["schema.md", "index.md", relativeWikiPath(workspace, sourcePath)];
-  return taskPacket("ingest", ingestPrompt(sourceId), contextFiles, ingestTargets(sourceId));
+  return validatedTaskPacket(
+    workspace,
+    taskPacket("ingest", ingestPrompt(sourceId), contextFiles, ingestTargets(sourceId)),
+  );
 }
 
 export async function prepareWikiQuery(
@@ -195,7 +254,10 @@ export async function prepareWikiQuery(
     "index.md",
     ...pages.map((page) => relativeWikiPath(workspace, page.path)),
   ];
-  return taskPacket("query", queryPrompt(question), contextFiles, []);
+  return validatedTaskPacket(
+    workspace,
+    taskPacket("query", queryPrompt(question), contextFiles, []),
+  );
 }
 
 export async function prepareWikiEvolve(workspace: Workspace): Promise<WikiTaskPacket> {
@@ -204,20 +266,50 @@ export async function prepareWikiEvolve(workspace: Workspace): Promise<WikiTaskP
     lintWiki(workspace),
     recentRunFiles(workspace),
   ]);
-  return evolvePacket(workspace, pages, report, runs);
+  return validatedTaskPacket(workspace, evolvePacket(workspace, pages, report, runs));
 }
 
-export async function applyWikiUpdate(
+export async function prepareWikiAnswerProposal(
   workspace: Workspace,
-  update: WikiUpdate,
+  input: WikiAnswerProposalInput,
+  now: Date = new Date(),
+): Promise<WikiProposal> {
+  const snapshot = { input: structuredClone(input), now: new Date(now.getTime()) };
+  validateAnswerInput(snapshot.input);
+  return withWikiWriteLock(workspace, (locked) =>
+    prepareWikiAnswerProposalLocked(locked, snapshot.input, snapshot.now),
+  );
+}
+
+async function prepareWikiAnswerProposalLocked(
+  workspace: Workspace,
+  input: WikiAnswerProposalInput,
+  now: Date,
+): Promise<WikiProposal> {
+  await assertInitializedWiki(workspace);
+  return buildAnswerProposal(workspace, await answerDraft(workspace, input, now));
+}
+
+export async function applyWikiProposal(
+  workspace: Workspace,
+  proposal: WikiProposal,
+  approval: WikiApproval,
   now: Date = new Date(),
 ): Promise<WikiApplyResult> {
-  await initWiki(workspace);
-  const paths = update.files.map((file) => wikiTargetPath(workspace, file.path));
-  validateWikiUpdate(update);
-  await Promise.all(update.files.map((file) => writeWikiUpdateFile(workspace, file)));
-  await appendLog(workspace, now, `update | ${update.note ?? "applied wiki update"}`);
-  return { files: paths, lint: await lintWiki(workspace) };
+  const snapshot = wikiApplicationSnapshot(proposal, approval, now);
+  validateWikiProposal(snapshot.proposal);
+  validateWikiApproval(snapshot.proposal, snapshot.approval);
+  return withWikiWriteLock(workspace, (locked) =>
+    applyApprovedWikiProposal(locked, snapshot.proposal, snapshot.approval, snapshot.now),
+  );
+}
+
+function wikiApplicationSnapshot(proposal: WikiProposal, approval: WikiApproval, now: Date) {
+  return {
+    proposal: structuredClone(proposal),
+    approval: structuredClone(approval),
+    now: new Date(now.getTime()),
+  };
 }
 
 export async function recordWikiRun(
@@ -225,21 +317,10 @@ export async function recordWikiRun(
   input: RecordWikiRunInput,
   now: Date = new Date(),
 ): Promise<WikiRun> {
-  await initWiki(workspace);
-  const id = runId(input, now);
-  const path = wikiPath(workspace, "raw", "runs", `${id}.json`);
-  await writeFile(path, `${JSON.stringify(runRecord(input, now), null, 2)}\n`, "utf8");
-  await appendLog(workspace, now, `run | ${input.task} | ${id}`);
-  return { id, path, recordedAt: now.toISOString() };
-}
-
-export async function fileWikiAnswer(
-  workspace: Workspace,
-  input: FileWikiAnswerInput,
-  now: Date = new Date(),
-): Promise<WikiApplyResult> {
-  validateAnswerInput(input);
-  return applyWikiUpdate(workspace, await answerUpdate(workspace, answerDraft(input, now)), now);
+  const snapshot = { input: structuredClone(input), now: new Date(now.getTime()) };
+  return withWikiWriteLock(workspace, (locked) =>
+    recordWikiRunUnlocked(locked, snapshot.input, snapshot.now),
+  );
 }
 
 export function renderWikiPage(metadata: WikiPageMetadata, body: string): string {
@@ -252,6 +333,26 @@ export function parseWikiPage(content: string, path = ""): WikiPage {
     path,
     content,
   };
+}
+
+async function addWikiSourceUnlocked(
+  workspace: Workspace,
+  input: AddWikiSourceInput,
+  now: Date,
+): Promise<WikiSource> {
+  await initWikiUnlocked(workspace);
+  const imported = await readWorkspaceSource(workspace, input.path);
+  const source = wikiSource(workspace, input, sourceId(input.title, imported.content), now);
+  await promoteManagedWikiFile(
+    workspace,
+    {
+      path: relativeWikiPath(workspace, source.path),
+      content: imported.content,
+      mode: imported.mode,
+    },
+    `## [${now.toISOString()}] source | ${auditValue(input.title)} | ${source.id}`,
+  );
+  return source;
 }
 
 function wikiSource(
@@ -278,12 +379,22 @@ function sourceId(title: string, content: Buffer): string {
 
 async function findSourcePath(workspace: Workspace, sourceId: string): Promise<string> {
   const root = wikiPath(workspace, "raw", "sources");
+  await assertWikiPath(workspace, {
+    path: "raw/sources",
+    type: "directory",
+    allowMissing: false,
+  });
   const names = await readdir(root);
-  const name = names.find((candidate) => candidate.startsWith(`${sourceId}.`));
+  const name = names.find((candidate) => sourceFileId(candidate) === sourceId);
   if (name === undefined) {
     throw new Error(`Wiki source not found: ${sourceId}`);
   }
-  return join(root, name);
+  return (await resolveWikiSource(workspace, `raw/sources/${name}`)).path;
+}
+
+function sourceFileId(name: string): string {
+  const extension = extname(name);
+  return extension.length === 0 ? name : name.slice(0, -extension.length);
 }
 
 function taskPacket(
@@ -301,10 +412,21 @@ function taskPacket(
   };
 }
 
+async function validatedTaskPacket(
+  workspace: Workspace,
+  packet: WikiTaskPacket,
+): Promise<WikiTaskPacket> {
+  await Promise.all(
+    packet.contextFiles.map((path) =>
+      assertWikiPath(workspace, { path, type: "file", allowMissing: false }),
+    ),
+  );
+  return packet;
+}
+
 function ingestTargets(sourceId: string): string[] {
   return [
     "index.md",
-    "log.md",
     `pages/sources/${sourceId}.md`,
     `pages/concepts/${sourceId}.md`,
     "pages/entities/*.md",
@@ -319,7 +441,7 @@ function ingestPrompt(sourceId: string): string {
     "Preserve source coverage before compression: keep distinct operating models, practices, risks, and tradeoffs as separate source-backed claims.",
     "Create or update source, concept, entity, and synthesis pages when the source contains reusable knowledge beyond a one-off summary.",
     "Flag contradictions with conflicted pages instead of overwriting silently.",
-    "Update index.md and append log.md in the same update.",
+    "Prepare candidate page and index changes only. Ingest approval and promotion are not implemented yet.",
   ].join("\n");
 }
 
@@ -328,7 +450,7 @@ function queryPrompt(question: string): string {
     "Answer from the LLM Wiki.",
     "Read index.md first, then the provided relevant pages.",
     "Cite page/source paths for accepted claims.",
-    "File reusable answers under pages/questions or pages/syntheses.",
+    "Prepare reusable answers as reviewable proposals with explicit claim/source pairs.",
     `Question: ${question}`,
   ].join("\n");
 }
@@ -341,7 +463,7 @@ function taskConstraints(): string[] {
     "Keep one main idea per sentence and split sentences that are hard to understand in one pass.",
     "Prefer small markdown updates with explicit links.",
     "Preserve raw sources as immutable evidence.",
-    "Keep index.md content-oriented and log.md chronological.",
+    "Keep index.md content-oriented; the wiki package owns chronological log writes.",
   ];
 }
 
@@ -377,7 +499,8 @@ function evolvePrompt(report: WikiLintReport): string {
     "Evolve the LLM Wiki without calling model APIs from this package.",
     `Start with ${report.issues.length} deterministic lint issue(s).`,
     "Read schema.md, index.md, log.md, candidate pages, and recent run records.",
-    "Prepare the smallest validated wiki update that improves durable knowledge quality.",
+    "Prepare the smallest candidate update that improves durable knowledge quality.",
+    "Evolve approval and promotion are not implemented yet; do not write the live wiki.",
     "If no safe improvement exists, record the reason instead of editing pages.",
   ].join("\n");
 }
@@ -398,7 +521,7 @@ function evolveContextFiles(
 }
 
 function evolveTargets(): string[] {
-  return ["index.md", "log.md", "pages/**/*.md"];
+  return ["index.md", "pages/**/*.md"];
 }
 
 function evolveConstraints(): string[] {
@@ -407,7 +530,7 @@ function evolveConstraints(): string[] {
     "Do not modify raw/sources or raw/runs from an evolve update.",
     "Do not resolve conflicted pages without explicit source support.",
     "Prefer one coherent improvement per evolve run.",
-    "Record skipped improvements and uncertainty in log.md or a sourced page.",
+    "Record durable uncertainty in a sourced page; the package owns log.md.",
   ];
 }
 
@@ -431,12 +554,17 @@ function pageMatches(page: WikiPage, tokens: readonly string[]): boolean {
 
 async function recentRunFiles(workspace: Workspace): Promise<string[]> {
   const root = wikiPath(workspace, "raw", "runs");
-  const names = await readdir(root).catch(() => []);
-  return names
+  await assertWikiPath(workspace, { path: "raw/runs", type: "directory", allowMissing: false });
+  const names = await readdir(root);
+  const paths = names
     .filter((name) => name.endsWith(".json"))
     .sort()
     .slice(-5)
     .map((name) => `raw/runs/${name}`);
+  await Promise.all(
+    paths.map((path) => assertWikiPath(workspace, { path, type: "file", allowMissing: false })),
+  );
+  return paths;
 }
 
 function evolvePageFiles(
@@ -457,15 +585,6 @@ function unique(values: readonly string[]): string[] {
   return [...new Set(values)];
 }
 
-async function pathExists(path: string): Promise<boolean> {
-  try {
-    await stat(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function wikiPath(workspace: Workspace, ...parts: string[]): string {
   return join(workspace.root, "wiki", ...parts);
 }
@@ -474,20 +593,37 @@ function relativeWikiPath(workspace: Workspace, path: string): string {
   return relative(wikiPath(workspace), path);
 }
 
-function wikiTargetPath(workspace: Workspace, path: string): string {
-  const root = resolve(wikiPath(workspace));
-  const target = resolve(root, path);
-  if (target !== root && !target.startsWith(`${root}/`)) {
-    throw new Error(`Wiki update path escapes wiki root: ${path}`);
-  }
-  return target;
-}
-
 function wikiDirectories(workspace: Workspace): string[] {
   return [
     wikiPath(workspace, "raw", "sources"),
     wikiPath(workspace, "raw", "runs"),
     ...pageDirs.map((dir) => wikiPath(workspace, "pages", dir)),
+  ];
+}
+
+async function assertWikiLayout(workspace: Workspace, allowMissing: boolean): Promise<void> {
+  await Promise.all(
+    wikiLayoutExpectations(allowMissing).map((expectation) =>
+      assertWikiPath(workspace, expectation),
+    ),
+  );
+}
+
+function wikiLayoutExpectations(allowMissing: boolean): WikiPathExpectation[] {
+  return [
+    ...[
+      "",
+      "raw",
+      "raw/sources",
+      "raw/runs",
+      "pages",
+      ...pageDirs.map((dir) => `pages/${dir}`),
+    ].map((path) => ({ path, type: "directory" as const, allowMissing })),
+    ...["schema.md", "index.md", "log.md"].map((path) => ({
+      path,
+      type: "file" as const,
+      allowMissing,
+    })),
   ];
 }
 
@@ -501,37 +637,76 @@ async function writeSeedFile(path: string, content: string): Promise<void> {
   }
 }
 
-async function appendLog(workspace: Workspace, now: Date, entry: string): Promise<void> {
-  const file = await open(wikiPath(workspace, "log.md"), "a");
-  try {
-    await file.writeFile(`\n## [${now.toISOString()}] ${entry}\n`);
-  } finally {
-    await file.close();
-  }
-}
-
 async function readWikiPageFile(path: string): Promise<WikiPage> {
+  const info = await lstat(path);
+  if (info.isSymbolicLink() || !info.isFile()) {
+    throw new Error(`Wiki page is not a regular file: ${path}`);
+  }
   return parseWikiPage(await readFile(path, "utf8"), path);
 }
 
-async function markdownFiles(root: string): Promise<string[]> {
-  const entries = await readdir(root, { withFileTypes: true });
-  const nested = await Promise.all(entries.map((entry) => childMarkdownFiles(root, entry)));
-  return nested.flat().sort();
+interface MarkdownFileSet {
+  readonly paths: readonly string[];
+  readonly issues: readonly WikiLintIssue[];
 }
 
-async function childMarkdownFiles(root: string, entry: { name: string; isDirectory(): boolean }) {
+async function markdownFileSet(root: string): Promise<MarkdownFileSet> {
+  const entries = await readdir(root, { withFileTypes: true });
+  const nested = await Promise.all(entries.map((entry) => childMarkdownFileSet(root, entry)));
+  return {
+    paths: nested.flatMap((result) => result.paths).sort(),
+    issues: nested.flatMap((result) => result.issues),
+  };
+}
+
+async function childMarkdownFileSet(
+  root: string,
+  entry: {
+    name: string;
+    isDirectory(): boolean;
+    isFile(): boolean;
+    isSymbolicLink(): boolean;
+  },
+): Promise<MarkdownFileSet> {
   const path = join(root, entry.name);
   if (entry.isDirectory()) {
-    return markdownFiles(path);
+    return markdownFileSet(path);
   }
-  return entry.name.endsWith(".md") ? [path] : [];
+  if (entry.isSymbolicLink() || (entry.name.endsWith(".md") && !entry.isFile())) {
+    return {
+      paths: [],
+      issues: [issue("unsafe-page-path", path, "Wiki page path is not a regular file")],
+    };
+  }
+  return { paths: entry.name.endsWith(".md") ? [path] : [], issues: [] };
 }
 
 async function requiredIssues(workspace: Workspace): Promise<WikiLintIssue[]> {
-  return Promise.all(requiredPaths(workspace).map(requiredIssue)).then((results) =>
-    results.filter((issue): issue is WikiLintIssue => issue !== undefined),
-  );
+  return Promise.all(
+    wikiLayoutExpectations(false).map((expectation) => requiredLayoutIssue(workspace, expectation)),
+  ).then((results) => results.filter((issue): issue is WikiLintIssue => issue !== undefined));
+}
+
+async function requiredLayoutIssue(
+  workspace: Workspace,
+  expectation: WikiPathExpectation,
+): Promise<WikiLintIssue | undefined> {
+  const path = wikiPath(workspace, expectation.path);
+  try {
+    const info = await lstat(path);
+    return validLayoutType(info, expectation.type)
+      ? undefined
+      : issue("unsafe-required-path", path, `Required wiki ${expectation.type} is unsafe`);
+  } catch {
+    return issue("missing-required-path", path, "Required wiki path is missing");
+  }
+}
+
+function validLayoutType(
+  info: { isDirectory(): boolean; isFile(): boolean; isSymbolicLink(): boolean },
+  type: WikiPathExpectation["type"],
+): boolean {
+  return !info.isSymbolicLink() && (type === "directory" ? info.isDirectory() : info.isFile());
 }
 
 async function requiredIssue(path: string): Promise<WikiLintIssue | undefined> {
@@ -543,59 +718,67 @@ async function requiredIssue(path: string): Promise<WikiLintIssue | undefined> {
   }
 }
 
-function requiredPaths(workspace: Workspace): string[] {
-  return [
-    wikiPath(workspace, "schema.md"),
-    wikiPath(workspace, "index.md"),
-    wikiPath(workspace, "log.md"),
-    ...wikiDirectories(workspace),
-  ];
-}
-
-function validateWikiUpdate(update: WikiUpdate): void {
-  if (update.files.length === 0) {
-    throw new Error("Wiki update requires at least one file");
-  }
-  if (changesPages(update) && !includesIndexAndLog(update)) {
-    throw new Error("Wiki page updates must include index.md and log.md");
-  }
-  for (const file of update.files) {
-    validateWikiUpdateFile(file);
+async function assertInitializedWiki(workspace: Workspace): Promise<void> {
+  const issues = await requiredIssues(workspace);
+  if (issues.length > 0) {
+    throw new Error("Wiki must be initialized before preparing a proposal");
   }
 }
 
-function changesPages(update: WikiUpdate): boolean {
-  return update.files.some((file) => file.path.startsWith("pages/"));
+function validateWikiProposal(proposal: WikiProposal): void {
+  validateProposalShape(proposal);
+  validateProposalFiles(proposal.files);
+  validateProposalPreconditions(proposal);
+  if (proposal.digest !== proposalDigest(proposal)) {
+    throw new Error("Wiki proposal digest does not match its reviewed content");
+  }
+  if (proposal.id !== `answer-${proposal.digest}`) {
+    throw new Error("Wiki proposal id does not match its digest");
+  }
 }
 
-function includesIndexAndLog(update: WikiUpdate): boolean {
-  const paths = update.files.map((file) => file.path);
-  return paths.includes("index.md") && paths.includes("log.md");
+function validateProposalShape(proposal: WikiProposal): void {
+  if (proposal.kind !== "answer" || proposal.files.length !== 2) {
+    throw new Error("Unsupported wiki proposal shape");
+  }
+  if (proposal.note.trim().length === 0) {
+    throw new Error("Wiki proposal requires a note");
+  }
 }
 
-function validateWikiUpdateFile(file: WikiUpdateFile): void {
-  if (!isAllowedWikiUpdatePath(file.path)) {
-    throw new Error(`Unsupported wiki update path: ${file.path}`);
+function validateProposalFiles(files: readonly WikiUpdateFile[]): void {
+  const paths = files.map((file) => file.path);
+  if (new Set(paths).size !== paths.length) {
+    throw new Error("Wiki proposal contains duplicate target paths");
+  }
+  for (const file of files) {
+    validateProposalFile(file);
+  }
+  if (!paths.includes("index.md") || !paths.some(questionPagePath)) {
+    throw new Error("Answer proposal must include index.md and one question page");
+  }
+  validateAnswerProposalPage(files);
+}
+
+function validateProposalFile(file: WikiUpdateFile): void {
+  if (!canonicalProposalPath(file.path)) {
+    throw new Error(`Unsupported wiki proposal path: ${file.path}`);
   }
   if (file.path.startsWith("pages/")) {
     assertValidPageUpdate(file);
   }
 }
 
-function isAllowedWikiUpdatePath(path: string): boolean {
-  return path === normalizedPath(path) && managedWikiPath(path);
+function canonicalProposalPath(path: string): boolean {
+  return (
+    !path.includes("\\") &&
+    posix.normalize(path) === path &&
+    (path === "index.md" || questionPagePath(path))
+  );
 }
 
-function managedWikiPath(path: string): boolean {
-  return path === "index.md" || path === "log.md" || pageUpdatePath(path);
-}
-
-function pageUpdatePath(path: string): boolean {
-  return path.startsWith("pages/") && path.endsWith(".md");
-}
-
-function normalizedPath(path: string): string {
-  return normalize(path);
+function questionPagePath(path: string): boolean {
+  return /^pages\/questions\/[^/]+\.md$/.test(path);
 }
 
 function assertValidPageUpdate(file: WikiUpdateFile): void {
@@ -606,10 +789,58 @@ function assertValidPageUpdate(file: WikiUpdateFile): void {
   }
 }
 
-async function writeWikiUpdateFile(workspace: Workspace, file: WikiUpdateFile): Promise<void> {
-  const path = wikiTargetPath(workspace, file.path);
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, file.content, "utf8");
+function validateAnswerProposalPage(files: readonly WikiUpdateFile[]): void {
+  const file = files.find((candidate) => questionPagePath(candidate.path));
+  if (file === undefined) {
+    throw new Error("Answer proposal is missing its question page");
+  }
+  const page = parseWikiPage(file.content, file.path);
+  const claimSources = unique(acceptedClaimRecords(page).map((claim) => claim.source));
+  if (
+    page.metadata.kind !== "question" ||
+    page.metadata.status !== "active" ||
+    page.metadata.slug !== posix.basename(file.path, ".md") ||
+    claimSources.length === 0 ||
+    JSON.stringify(page.metadata.sources) !== JSON.stringify(claimSources)
+  ) {
+    throw new Error("Answer proposal page does not match its explicit accepted claims");
+  }
+}
+
+async function recordWikiRunUnlocked(
+  workspace: Workspace,
+  input: RecordWikiRunInput,
+  now: Date,
+): Promise<WikiRun> {
+  await initWikiUnlocked(workspace);
+  const id = runId(input, now);
+  const path = wikiPath(workspace, "raw", "runs", `${id}.json`);
+  await promoteManagedWikiFile(
+    workspace,
+    {
+      path: relativeWikiPath(workspace, path),
+      content: `${JSON.stringify(runRecord(input, now), null, 2)}\n`,
+    },
+    `## [${now.toISOString()}] run | ${auditValue(input.task)} | ${id}`,
+  );
+  return { id, path, recordedAt: now.toISOString() };
+}
+
+async function promoteManagedWikiFile(
+  workspace: Workspace,
+  file: WikiTransactionFile,
+  auditEntry: string,
+): Promise<void> {
+  await promoteWikiFiles(workspace, {
+    files: [{ ...file, createOnly: true }],
+    auditEntry,
+    validate: validateManagedWikiCandidate,
+  });
+}
+
+async function validateManagedWikiCandidate(workspace: Workspace): Promise<WikiLintReport> {
+  await assertWikiLayout(workspace, false);
+  return { issues: [] };
 }
 
 function runId(input: RecordWikiRunInput, now: Date): string {
@@ -629,71 +860,352 @@ function runRecord(input: RecordWikiRunInput, now: Date) {
   };
 }
 
-function questionMetadata(input: FileWikiAnswerInput, slug: string, now: Date): WikiPageMetadata {
+async function questionMetadata(
+  workspace: Workspace,
+  input: WikiAnswerProposalInput,
+  path: string,
+  now: Date,
+): Promise<WikiPageMetadata> {
+  const existing = await optionalWikiPage(workspace, path);
+  const timestamp = now.toISOString();
   return {
     title: input.title ?? input.question,
-    slug,
+    slug: slugify(input.title ?? input.question),
     kind: "question",
     status: "active",
-    createdAt: now.toISOString(),
-    updatedAt: now.toISOString(),
-    sources: input.sources,
+    createdAt: existing?.metadata.createdAt ?? timestamp,
+    updatedAt: timestamp,
+    sources: unique(input.acceptedClaims.map((claim) => claim.source)),
   };
 }
 
-function questionBody(input: FileWikiAnswerInput): string {
-  return `## Question\n\n${input.question}\n\n## Summary\n\n${input.answer}\n\n## Key Claims\n\n${answerClaims(input.sources)}\n\n## Links\n\n`;
+function questionBody(input: WikiAnswerProposalInput): string {
+  return `## Question\n\n${input.question}\n\n## Summary\n\n${input.summary}\n\n## Key Claims\n\n${answerClaims(input.acceptedClaims)}\n\n## Links\n\n`;
 }
 
-function answerClaims(sources: readonly string[]): string {
-  return sources
-    .map((source) => `- accepted: Answer is supported by ${source}\n  source: ${source}`)
-    .join("\n");
+function answerClaims(claims: readonly WikiAcceptedClaim[]): string {
+  return claims.map((claim) => `- accepted: ${claim.text}\n  source: ${claim.source}`).join("\n");
 }
 
-function answerDraft(input: FileWikiAnswerInput, now: Date): WikiAnswerDraft {
-  const slug = slugify(input.title ?? input.question);
+async function answerDraft(
+  workspace: Workspace,
+  input: WikiAnswerProposalInput,
+  now: Date,
+): Promise<WikiAnswerDraft> {
+  const normalized = await normalizedAnswerInput(workspace, input);
+  const path = answerPath(normalized);
   return {
-    path: `pages/questions/${slug}.md`,
-    page: renderWikiPage(questionMetadata(input, slug, now), questionBody(input)),
-    input,
-    now,
+    path,
+    page: renderWikiPage(
+      await questionMetadata(workspace, normalized, path, now),
+      questionBody(normalized),
+    ),
+    input: normalized,
   };
 }
 
-async function answerUpdate(workspace: Workspace, draft: WikiAnswerDraft): Promise<WikiUpdate> {
-  return {
-    note: `file answer | ${draft.input.question}`,
-    files: [
-      updateFile("index.md", await indexWithAnswer(workspace, draft.path, draft.input)),
-      updateFile("log.md", await logWithAnswer(workspace, draft.input, draft.now)),
-      updateFile(draft.path, draft.page),
-    ],
-  };
+function answerPath(input: WikiAnswerProposalInput): string {
+  return `pages/questions/${slugify(input.title ?? input.question)}.md`;
 }
 
 async function indexWithAnswer(
   workspace: Workspace,
   path: string,
-  input: FileWikiAnswerInput,
+  input: WikiAnswerProposalInput,
 ): Promise<string> {
-  const index = await readFile(wikiPath(workspace, "index.md"), "utf8").catch(
-    () => "# Wiki Index\n",
-  );
-  return `${index.trimEnd()}\n- [${input.title ?? input.question}](${path})\n`;
+  const index = await readFile(wikiPath(workspace, "index.md"), "utf8");
+  if (index.includes(`(${path})`)) {
+    return index;
+  }
+  return `${index.trimEnd()}\n- [${markdownLabel(input.title ?? input.question)}](${path})\n`;
 }
 
-async function logWithAnswer(
-  workspace: Workspace,
-  input: FileWikiAnswerInput,
-  now: Date,
-): Promise<string> {
-  const log = await readFile(wikiPath(workspace, "log.md"), "utf8").catch(() => "# Wiki Log\n");
-  return `${log.trimEnd()}\n\n## [${now.toISOString()}] query | ${input.question}\n`;
+async function optionalWikiPage(workspace: Workspace, path: string): Promise<WikiPage | undefined> {
+  return readFile(wikiPath(workspace, path), "utf8")
+    .then((content) => parseWikiPage(content, wikiPath(workspace, path)))
+    .catch(optionalMissingFile);
 }
 
 function updateFile(path: string, content: string): WikiUpdateFile {
   return { path, content };
+}
+
+async function normalizedAnswerInput(
+  workspace: Workspace,
+  input: WikiAnswerProposalInput,
+): Promise<WikiAnswerProposalInput> {
+  const acceptedClaims = await canonicalAcceptedClaims(workspace, input.acceptedClaims);
+  return input.title === undefined
+    ? { question: input.question.trim(), summary: input.summary.trim(), acceptedClaims }
+    : {
+        question: input.question.trim(),
+        summary: input.summary.trim(),
+        acceptedClaims,
+        title: input.title.trim(),
+      };
+}
+
+async function canonicalAcceptedClaims(
+  workspace: Workspace,
+  claims: readonly WikiAcceptedClaim[],
+): Promise<WikiAcceptedClaim[]> {
+  const normalized: WikiAcceptedClaim[] = [];
+  for (const claim of claims) {
+    validateAcceptedClaim(claim);
+    await resolveWikiSource(workspace, claim.source);
+    const candidate = { text: claim.text.trim(), source: claim.source };
+    if (!normalized.some((existing) => sameAcceptedClaim(existing, candidate))) {
+      normalized.push(candidate);
+    }
+  }
+  return normalized;
+}
+
+function sameAcceptedClaim(left: WikiAcceptedClaim, right: WikiAcceptedClaim): boolean {
+  return left.source === right.source && normalizeClaim(left.text) === normalizeClaim(right.text);
+}
+
+function validateAcceptedClaim(claim: WikiAcceptedClaim): void {
+  if (claim.text.trim().length === 0 || /[\r\n]/.test(claim.text)) {
+    throw new Error("Accepted wiki claims must contain one non-empty line");
+  }
+  if (claim.source.trim().length === 0 || /[\r\n]/.test(claim.source)) {
+    throw new Error("Accepted wiki claims require one managed source path");
+  }
+}
+
+async function buildAnswerProposal(
+  workspace: Workspace,
+  draft: WikiAnswerDraft,
+): Promise<WikiProposal> {
+  const files = await answerProposalFiles(workspace, draft);
+  const content = await answerProposalContent(workspace, draft, files);
+  const digest = proposalDigest(content);
+  return { ...content, id: `answer-${digest}`, digest };
+}
+
+async function answerProposalFiles(
+  workspace: Workspace,
+  draft: WikiAnswerDraft,
+): Promise<WikiUpdateFile[]> {
+  return [
+    updateFile("index.md", await indexWithAnswer(workspace, draft.path, draft.input)),
+    updateFile(draft.path, draft.page),
+  ];
+}
+
+async function answerProposalContent(
+  workspace: Workspace,
+  draft: WikiAnswerDraft,
+  files: readonly WikiUpdateFile[],
+): Promise<WikiProposalContent> {
+  const [baseHashes, sourceHashes, diagnostics] = await Promise.all([
+    hashWikiFiles(workspace, proposalBasePaths(files)),
+    answerSourceHashes(workspace, draft.input.acceptedClaims),
+    previewWikiFiles(workspace, files, lintWiki),
+  ]);
+  return {
+    kind: "answer",
+    note: `file answer | ${draft.input.question}`,
+    files,
+    baseHashes,
+    sourceHashes,
+    diagnostics,
+  };
+}
+
+async function answerSourceHashes(
+  workspace: Workspace,
+  claims: readonly WikiAcceptedClaim[],
+): Promise<Record<string, string>> {
+  const entries = await Promise.all(
+    unique(claims.map((claim) => claim.source))
+      .sort()
+      .map(async (source) => [source, (await resolveWikiSource(workspace, source)).hash] as const),
+  );
+  return Object.fromEntries(entries);
+}
+
+function proposalBasePaths(files: readonly WikiUpdateFile[]): string[] {
+  return unique(["schema.md", ...files.map((file) => file.path)]).sort();
+}
+
+function proposalDigest(proposal: WikiProposalContent | WikiProposal): string {
+  return sha256(JSON.stringify(proposalDigestPayload(proposal)));
+}
+
+function proposalDigestPayload(proposal: WikiProposalContent | WikiProposal) {
+  return {
+    kind: proposal.kind,
+    note: proposal.note,
+    files: [...proposal.files].sort((left, right) => left.path.localeCompare(right.path)),
+    baseHashes: sortedRecordEntries(proposal.baseHashes),
+    sourceHashes: sortedRecordEntries(proposal.sourceHashes),
+    diagnostics: sortedIssues(proposal.diagnostics.issues),
+  };
+}
+
+function sortedRecordEntries<T>(record: Readonly<Record<string, T>>): [string, T][] {
+  return Object.entries(record).sort(([left], [right]) => left.localeCompare(right));
+}
+
+function sortedIssues(issues: readonly WikiLintIssue[]): WikiLintIssue[] {
+  return [...issues].sort((left, right) =>
+    `${left.path}\n${left.code}\n${left.message}`.localeCompare(
+      `${right.path}\n${right.code}\n${right.message}`,
+    ),
+  );
+}
+
+function validateProposalPreconditions(proposal: WikiProposal): void {
+  assertRecordKeys(proposal.baseHashes, proposalBasePaths(proposal.files), "base hash");
+  assertRecordKeys(proposal.sourceHashes, proposalSources(proposal), "source hash");
+  for (const hash of Object.values(proposal.baseHashes)) {
+    assertHash(hash, true);
+  }
+  for (const hash of Object.values(proposal.sourceHashes)) {
+    assertHash(hash, false);
+  }
+}
+
+function proposalSources(proposal: WikiProposal): string[] {
+  const page = proposal.files.find((file) => questionPagePath(file.path));
+  return page === undefined ? [] : [...parseWikiPage(page.content).metadata.sources].sort();
+}
+
+function assertRecordKeys<T>(
+  record: Readonly<Record<string, T>>,
+  expected: readonly string[],
+  label: string,
+): void {
+  if (JSON.stringify(Object.keys(record).sort()) !== JSON.stringify([...expected].sort())) {
+    throw new Error(`Wiki proposal ${label} keys do not match its content`);
+  }
+}
+
+function assertHash(hash: string | null, nullable: boolean): void {
+  if ((hash === null && nullable) || (typeof hash === "string" && /^[a-f0-9]{64}$/.test(hash))) {
+    return;
+  }
+  throw new Error("Wiki proposal contains an invalid content hash");
+}
+
+function validateWikiApproval(proposal: WikiProposal, approval: WikiApproval): void {
+  if (
+    approval.accepted !== true ||
+    approval.proposalId !== proposal.id ||
+    approval.digest !== proposal.digest
+  ) {
+    throw new Error("Wiki approval does not match the reviewed proposal");
+  }
+  if (approval.reviewedBy.trim().length === 0 || !validIsoDate(approval.reviewedAt)) {
+    throw new Error("Wiki approval requires a reviewer and ISO review timestamp");
+  }
+  if (Date.parse(approval.reviewedAt) < proposalUpdatedAt(proposal)) {
+    throw new Error("Wiki approval cannot predate the reviewed proposal");
+  }
+}
+
+function validIsoDate(value: string): boolean {
+  const timestamp = Date.parse(value);
+  return !Number.isNaN(timestamp) && new Date(timestamp).toISOString() === value;
+}
+
+function proposalUpdatedAt(proposal: WikiProposal): number {
+  const page = proposal.files.find((file) => questionPagePath(file.path));
+  return page === undefined
+    ? Number.POSITIVE_INFINITY
+    : Date.parse(parseWikiPage(page.content).metadata.updatedAt);
+}
+
+async function applyApprovedWikiProposal(
+  workspace: Workspace,
+  proposal: WikiProposal,
+  approval: WikiApproval,
+  now: Date,
+): Promise<WikiApplyResult> {
+  await assertProposalNotApplied(workspace, proposal.id);
+  await assertProposalState(workspace, proposal);
+  if (proposal.diagnostics.issues.length > 0) {
+    throw new WikiCandidateValidationError(proposal.diagnostics);
+  }
+  const result = await promoteWikiFiles(workspace, {
+    files: proposal.files,
+    auditEntry: proposalAuditEntry(proposal, approval, now),
+    validate: lintWiki,
+    prePromote: () => assertProposalState(workspace, proposal),
+  });
+  return { proposalId: proposal.id, files: result.files, lint: result.lint };
+}
+
+async function assertProposalNotApplied(workspace: Workspace, id: string): Promise<void> {
+  await assertWikiPath(workspace, { path: "log.md", type: "file", allowMissing: false });
+  const log = await readFile(wikiPath(workspace, "log.md"), "utf8");
+  if (log.includes(`proposal | ${id} |`)) {
+    throw new Error(`Wiki proposal was already applied: ${id}`);
+  }
+}
+
+async function assertProposalState(workspace: Workspace, proposal: WikiProposal): Promise<void> {
+  const [baseHashes, sourceHashes] = await Promise.all([
+    hashWikiFiles(workspace, Object.keys(proposal.baseHashes)),
+    currentSourceHashes(workspace, Object.keys(proposal.sourceHashes)),
+  ]);
+  assertHashesMatch(proposal.baseHashes, baseHashes);
+  assertHashesMatch(proposal.sourceHashes, sourceHashes);
+}
+
+async function currentSourceHashes(
+  workspace: Workspace,
+  sources: readonly string[],
+): Promise<Record<string, string>> {
+  const entries = await Promise.all(
+    sources.map(
+      async (source) => [source, (await resolveWikiSource(workspace, source)).hash] as const,
+    ),
+  );
+  return Object.fromEntries(entries);
+}
+
+function assertHashesMatch<T>(
+  expected: Readonly<Record<string, T>>,
+  current: Readonly<Record<string, T>>,
+): void {
+  for (const [path, hash] of Object.entries(expected)) {
+    if (current[path] !== hash) {
+      throw new Error(`Wiki proposal is stale: ${path}`);
+    }
+  }
+}
+
+function proposalAuditEntry(
+  proposal: WikiProposal,
+  approval: WikiApproval,
+  appliedAt: Date,
+): string {
+  return `## [${appliedAt.toISOString()}] proposal | ${proposal.id} | digest=${
+    proposal.digest
+  } | reviewer=${auditValue(approval.reviewedBy)} | reviewedAt=${
+    approval.reviewedAt
+  } | ${auditValue(proposal.note)}`;
+}
+
+function auditValue(value: string): string {
+  return value
+    .replace(/[\r\n|]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function markdownLabel(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/\[/g, "\\[").replace(/\]/g, "\\]");
+}
+
+function optionalMissingFile(error: unknown): undefined {
+  if (isNodeError(error, "ENOENT")) {
+    return undefined;
+  }
+  throw error;
 }
 
 async function contentIssues(workspace: Workspace, now: Date): Promise<WikiLintIssue[]> {
@@ -716,11 +1228,11 @@ interface WikiPageSet {
 }
 
 async function readPageSet(workspace: Workspace): Promise<WikiPageSet> {
-  const paths = await markdownFiles(wikiPath(workspace, "pages"));
-  const results = await Promise.all(paths.map(readWikiPageResult));
+  const files = await markdownFileSet(wikiPath(workspace, "pages"));
+  const results = await Promise.all(files.paths.map(readWikiPageResult));
   return {
     pages: results.flatMap((result) => result.pages),
-    issues: results.flatMap((result) => result.issues),
+    issues: [...files.issues, ...results.flatMap((result) => result.issues)],
   };
 }
 
@@ -771,7 +1283,10 @@ function acceptedClaimIssue(path: string, line: string, next?: string): WikiLint
   if (!line.trimStart().startsWith("- accepted:")) {
     return [];
   }
-  return next?.trimStart().startsWith("source:")
+  if (acceptedClaimText(line) === undefined) {
+    return [issue("empty-accepted-claim", path, "Accepted claim requires text")];
+  }
+  return acceptedClaimSource(next ?? "").length > 0
     ? []
     : [issue("accepted-claim-missing-source", path, "Accepted claim requires a source")];
 }
@@ -845,12 +1360,15 @@ async function sourceReferenceIssue(
   path: string,
   source: string,
 ): Promise<WikiLintIssue[]> {
-  if (!source.startsWith("raw/sources/")) {
-    return [issue("unsupported-source", path, `Unsupported source reference: ${source}`)];
+  try {
+    await resolveWikiSource(workspace, source);
+    return [];
+  } catch (error) {
+    if (error instanceof WikiSourceReferenceError) {
+      return [issue(`${error.kind}-source`, path, error.message)];
+    }
+    throw error;
   }
-  return (await pathExists(wikiPath(workspace, source)))
-    ? []
-    : [issue("missing-source", path, `Source reference is missing: ${source}`)];
 }
 
 function orphanPageIssues(page: WikiPage, pages: readonly WikiPage[]): WikiLintIssue[] {
@@ -1041,7 +1559,7 @@ function schemaSeed(): string {
 function schemaSections(): string[] {
   return [
     "# Wiki Schema",
-    "## Role\n\nThe LLM agent maintains this wiki. Humans curate sources, ask questions, and review outcomes.",
+    "## Role\n\nThe LLM agent proposes source-backed changes. For answer proposals, a trusted caller attests that a human reviewed the exact bytes; the package validates the attestation and current hashes but does not authenticate the reviewer.",
     schemaLayerRules(),
     schemaPageRules(),
     schemaWorkflowRules(),
@@ -1054,7 +1572,7 @@ function schemaLayerRules(): string {
     "- raw sources are immutable evidence under `raw/sources/`.",
     "- wiki pages are compiled markdown knowledge under `pages/`.",
     "- `index.md` is the content map and must be updated with page changes.",
-    "- `log.md` is chronological and append-only.",
+    "- `log.md` is chronological, append-only, and written only by the wiki package.",
   ].join("\n");
 }
 
@@ -1064,6 +1582,7 @@ function schemaPageRules(): string {
     "- Use YAML frontmatter with title, slug, kind, status, createdAt, updatedAt, and sources.",
     "- Use typed claims: accepted, hypothesis, or conflicted.",
     "- Every accepted claim must include a following source line.",
+    "- A source path proves provenance, not truth. Accepted status requires review of the exact claim/source pair.",
     "- Keep each accepted claim distinct; do not duplicate the same claim/source pair across pages.",
     ...writingConstraints().map((constraint) => `- ${constraint}`),
     "- Keep one main idea per sentence. Split any sentence that is hard to understand in one pass.",
@@ -1074,19 +1593,31 @@ function schemaPageRules(): string {
 function schemaWorkflowRules(): string {
   return [
     "## Ingest",
-    "Read schema.md, index.md, then one raw source. Preserve source coverage before compression by keeping distinct operating models, practices, risks, and tradeoffs as separate source-backed claims. Create or update source, concept, entity, and synthesis pages when the source contains reusable knowledge beyond a one-off summary. Check existing claim/source pairs before writing to avoid semantic duplicates. Mark contradictions as conflicted instead of overwriting silently. Route ambiguous contradictions, stale updates, and user-owned interpretations to review instead of silently overwriting. Update index.md and log.md.",
+    "Read schema.md, index.md, then one raw source. Preserve source coverage before compression by keeping distinct operating models, practices, risks, and tradeoffs as separate source-backed claims. Create or update source, concept, entity, and synthesis pages when the source contains reusable knowledge beyond a one-off summary. Check existing claim/source pairs before writing to avoid semantic duplicates. Mark contradictions as conflicted instead of overwriting silently. Route ambiguous contradictions, stale updates, and user-owned interpretations to review instead of silently overwriting. Prepare candidate page and index changes only. Ingest approval and promotion are not implemented yet.",
     "## Query",
-    "Read index.md first, then relevant pages. Answer with citations to wiki pages or raw sources. File reusable answers as question or synthesis pages.",
+    "Read index.md first, then relevant pages. Answer with citations to wiki pages or raw sources. Prepare reusable answers as proposals with explicit claim/source pairs. Do not promote them before approval.",
     "## Evolve",
-    "Manual or automated agents read lint issues, recent runs, and candidate pages, then apply small source-backed improvements through validated updates.",
+    "Manual or automated agents read lint issues, recent runs, and candidate pages, then prepare small source-backed candidate updates. Evolve approval and promotion are not implemented yet.",
     "## Lint",
     "Check broken links, orphan pages, stale TODOs, unsupported sources, conflicted or review pages, duplicate slugs, duplicate accepted claims, stale active pages, and index drift.",
   ].join("\n\n");
 }
 
-function validateAnswerInput(input: FileWikiAnswerInput): void {
-  if (input.sources.length === 0) {
-    throw new Error("Wiki answer requires at least one source");
+function validateAnswerInput(input: WikiAnswerProposalInput): void {
+  if (input.question.trim().length === 0 || /[\r\n]/.test(input.question)) {
+    throw new Error("Wiki answer proposal requires a one-line question");
+  }
+  if (input.summary.trim().length === 0) {
+    throw new Error("Wiki answer proposal requires a summary");
+  }
+  if (input.acceptedClaims.length === 0) {
+    throw new Error("Wiki answer proposal requires at least one accepted claim");
+  }
+  if (
+    input.title !== undefined &&
+    (input.title.trim().length === 0 || /[\r\n]/.test(input.title))
+  ) {
+    throw new Error("Wiki answer proposal title must fit on one line");
   }
 }
 
@@ -1095,5 +1626,9 @@ function issue(code: string, path: string, message: string): WikiLintIssue {
 }
 
 function isFileExistsError(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && "code" in error && error.code === "EEXIST";
+  return isNodeError(error, "EEXIST");
+}
+
+function isNodeError(error: unknown, code: string): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error && error.code === code;
 }

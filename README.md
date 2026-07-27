@@ -49,7 +49,7 @@ docs/                    system, development, and testing guides
 
 ## Working With LLM Wiki
 
-LLM Wiki is maintained through agent-internal tools, but approved wiki pages are human-readable knowledge. Agents use `packages/local-tools` to register sources, prepare ingest/query/evolve task packets, file reusable answers, apply validated wiki updates, lint the wiki, and record runs. Wiki lint checks source-backed claims, index drift, review gates, stale review dates, and duplicate accepted claim/source pairs. There is no human-facing wiki CLI.
+LLM Wiki stores managed source copies and human-readable, reusable markdown knowledge. The current implementation provides safe answer-proposal and promotion primitives, not a runnable LLM workflow. Trusted integrations register workspace-local sources. The wiki package's agent-safe tool factory can prepare ingest/query/evolve packets and create answer proposals, but it cannot import sources or promote an answer directly; it is not wired into the default runtime yet. The implemented approval/promotion path currently covers reusable answer proposals only. A trusted caller must attest that a human reviewed the proposal's exact digest; the package validates that attestation but does not authenticate the reviewer. It then checks target and source hashes, validates a full candidate copy, promotes only the reviewed bytes, and appends its own audit entry. Wiki lint also rejects source traversal, directories, and symbolic links. There is no human-facing wiki CLI yet.
 
 Implement reusable code in `packages/*`, expose human-facing flows from `apps/cli` or `apps/service` only when they are meant for people, and keep provider-specific SDK details inside `packages/model-providers`.
 

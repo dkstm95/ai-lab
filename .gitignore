@@ -9,6 +9,8 @@ coverage/
 .env.*
 !.env.example
 .subbrain/
+.ai-lab-wiki.lock
+.wiki-txn-*
 build/
 out/
 data/

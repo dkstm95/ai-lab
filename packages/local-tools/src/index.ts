@@ -1,9 +1,9 @@
 import type { ToolCall, ToolDefinition, ToolResult } from "@ai-lab/protocol";
 import {
   addWikiSource,
-  fileWikiAnswer,
   initWiki,
   lintWiki,
+  prepareWikiAnswerProposal,
   prepareWikiEvolve,
   prepareWikiIngest,
   prepareWikiQuery,
@@ -46,7 +46,7 @@ export class InitWikiTool implements LocalTool {
 export class AddWikiSourceTool implements LocalTool {
   readonly definition = {
     name: "wiki.source.add",
-    description: "Registers a source file in the local LLM Wiki.",
+    description: "Registers a source file from inside the local workspace.",
   };
 
   constructor(private readonly workspace: Workspace) {}
@@ -129,16 +129,16 @@ export class RecordWikiRunTool implements LocalTool {
   }
 }
 
-export class FileWikiAnswerTool implements LocalTool {
+export class ProposeWikiAnswerTool implements LocalTool {
   readonly definition = {
-    name: "wiki.answer.file",
-    description: "Files a reusable query answer into the local LLM Wiki.",
+    name: "wiki.answer.propose",
+    description: "Prepares a source-backed answer proposal without changing the live wiki.",
   };
 
   constructor(private readonly workspace: Workspace) {}
 
   async execute(call: ToolCall): Promise<ToolResult> {
-    const result = await fileWikiAnswer(this.workspace, wikiAnswerInput(call));
+    const result = await prepareWikiAnswerProposal(this.workspace, wikiAnswerProposalInput(call));
     return { name: this.definition.name, output: result };
   }
 }
@@ -150,13 +150,12 @@ export function createWorkspaceTools(workspace: Workspace): LocalTool[] {
 export function createWikiTools(workspace: Workspace): LocalTool[] {
   return [
     new InitWikiTool(workspace),
-    new AddWikiSourceTool(workspace),
     new LintWikiTool(workspace),
     new PrepareWikiIngestTool(workspace),
     new PrepareWikiQueryTool(workspace),
     new PrepareWikiEvolveTool(workspace),
     new RecordWikiRunTool(workspace),
-    new FileWikiAnswerTool(workspace),
+    new ProposeWikiAnswerTool(workspace),
   ];
 }
 
@@ -168,22 +167,41 @@ function wikiRunInput(call: ToolCall) {
   };
 }
 
-function wikiAnswerInput(call: ToolCall) {
+function wikiAnswerProposalInput(call: ToolCall) {
   const title = optionalInput(call, "title");
   const input = {
     question: requiredInput(call, "question"),
-    answer: requiredInput(call, "answer"),
-    sources: sourceList(call),
+    summary: requiredInput(call, "summary"),
+    acceptedClaims: acceptedClaimList(call),
   };
   return title === undefined ? input : { ...input, title };
 }
 
-function sourceList(call: ToolCall): string[] {
-  const value = call.input.sources;
+function acceptedClaimList(call: ToolCall): { text: string; source: string }[] {
+  const value = call.input.acceptedClaims;
   if (!Array.isArray(value) || value.length === 0) {
-    throw new Error(`${call.name} requires sources`);
+    throw new Error(`${call.name} requires acceptedClaims`);
   }
-  return value.map(String);
+  return value.map((claim) => acceptedClaim(call, claim));
+}
+
+function acceptedClaim(call: ToolCall, value: unknown): { text: string; source: string } {
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`${call.name} acceptedClaims require text and source`);
+  }
+  const claim = value as Record<string, unknown>;
+  return {
+    text: requiredValue(call, claim, "text"),
+    source: requiredValue(call, claim, "source"),
+  };
+}
+
+function requiredValue(call: ToolCall, value: Record<string, unknown>, key: string): string {
+  const field = value[key];
+  if (typeof field !== "string" || field.trim().length === 0) {
+    throw new Error(`${call.name} acceptedClaims require ${key}`);
+  }
+  return field;
 }
 
 function requiredInput(call: ToolCall, key: string): string {

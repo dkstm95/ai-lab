@@ -6,12 +6,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   AddWikiSourceTool,
   EchoTool,
-  FileWikiAnswerTool,
   InitWikiTool,
   LintWikiTool,
   PrepareWikiEvolveTool,
   PrepareWikiIngestTool,
   PrepareWikiQueryTool,
+  ProposeWikiAnswerTool,
   RecordWikiRunTool,
   createWorkspaceTools,
 } from "../src/index.js";
@@ -48,17 +48,16 @@ describe("local tools", () => {
     expect(names).toEqual([
       "echo",
       "wiki.init",
-      "wiki.source.add",
       "wiki.lint",
       "wiki.ingest.prepare",
       "wiki.query.prepare",
       "wiki.evolve.prepare",
       "wiki.run.record",
-      "wiki.answer.file",
+      "wiki.answer.propose",
     ]);
   });
 
-  it("exposes wiki init, source, ingest, query, evolve, lint, run, and answer tools", async () => {
+  it("implements trusted source registration and agent-safe wiki tools", async () => {
     const workspace = await tempWorkspace();
     const sourcePath = join(workspace.root, "source.md");
     await writeFile(sourcePath, "# Source\n", "utf8");
@@ -86,12 +85,17 @@ describe("local tools", () => {
       name: "wiki.run.record",
       input: { task: "answer", input: "q", output: "a" },
     });
-    const answer = await new FileWikiAnswerTool(workspace).execute({
-      name: "wiki.answer.file",
+    const answer = await new ProposeWikiAnswerTool(workspace).execute({
+      name: "wiki.answer.propose",
       input: {
         question: "How does LLM Wiki work?",
-        answer: "Agents maintain the wiki from accepted sources.",
-        sources: [`raw/sources/${sourceId}.md`],
+        summary: "Agents maintain the wiki from accepted sources.",
+        acceptedClaims: [
+          {
+            text: "Agents maintain the wiki from accepted sources.",
+            source: `raw/sources/${sourceId}.md`,
+          },
+        ],
       },
     });
 
@@ -99,7 +103,12 @@ describe("local tools", () => {
     expect((query.output as { task: string }).task).toBe("query");
     expect((evolve.output as { task: string }).task).toBe("evolve");
     expect((lint.output as { issues: unknown[] }).issues).toEqual([]);
-    expect((answer.output as { lint: { issues: unknown[] } }).lint.issues).toEqual([]);
+    expect((answer.output as { diagnostics: { issues: unknown[] } }).diagnostics.issues).toEqual(
+      [],
+    );
+    await expect(
+      readFile(join(workspace.root, "wiki", "pages", "questions", "how-does-llm-wiki-work.md")),
+    ).rejects.toThrow();
     await expect(
       readFile(String((run.output as { path: string }).path), "utf8"),
     ).resolves.toContain('"task": "answer"');

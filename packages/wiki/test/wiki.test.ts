@@ -1,15 +1,26 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createWorkspace } from "@ai-lab/workspace";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  type WikiProposal,
   addWikiSource,
-  applyWikiUpdate,
-  fileWikiAnswer,
+  applyWikiProposal,
   initWiki,
   lintWiki,
   parseWikiPage,
+  prepareWikiAnswerProposal,
   prepareWikiEvolve,
   prepareWikiIngest,
   prepareWikiQuery,
@@ -17,8 +28,11 @@ import {
   recordWikiRun,
   renderWikiPage,
 } from "../src/index.js";
+import { promoteWikiFiles } from "../src/transaction.js";
 
 const roots: string[] = [];
+const supportsPosixModes = process.platform !== "win32";
+const supportsPermissionFailure = process.platform !== "win32" && process.getuid?.() !== 0;
 
 afterEach(async () => {
   await Promise.all(roots.map((root) => rm(root, { recursive: true, force: true })));
@@ -42,7 +56,7 @@ describe("wiki", () => {
     await expect(stat(join(workspace.root, "wiki", "pages", "playbooks"))).resolves.toBeDefined();
     await expect(stat(join(workspace.root, "wiki", "pages", "questions"))).resolves.toBeDefined();
     const schema = await readFile(join(workspace.root, "wiki", "schema.md"), "utf8");
-    expect(schema).toContain("The LLM agent maintains this wiki");
+    expect(schema).toContain("The LLM agent proposes source-backed changes");
     expect(schema).toContain("Avoid stale metaphors");
     expect(schema).toContain("Prefer short, familiar words");
     expect(schema).toContain("Remove every word that does not add meaning");
@@ -52,18 +66,84 @@ describe("wiki", () => {
     expect(schema).toContain("Keep one main idea per sentence");
   });
 
+  it("does not initialize through a symbolic wiki root", async () => {
+    const workspace = await tempWorkspace();
+    const outside = await tempWorkspace();
+    await symlink(outside.root, join(workspace.root, "wiki"));
+
+    await expect(initWiki(workspace)).rejects.toThrow("Wiki root");
+    await expect(stat(join(outside.root, "schema.md"))).rejects.toThrow();
+  });
+
+  it("serializes wiki writers with a workspace lock", async () => {
+    const workspace = await tempWorkspace();
+    const lock = join(workspace.root, ".ai-lab-wiki.lock");
+    await writeFile(lock, "held\n", "utf8");
+
+    await expect(initWiki(workspace)).rejects.toThrow("holds the lock");
+    await expect(stat(join(workspace.root, "wiki"))).rejects.toThrow();
+    await rm(lock);
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    await writeFile(lock, "held\n", "utf8");
+    await expect(prepareWikiAnswerProposal(workspace, answerInput())).rejects.toThrow(
+      "holds the lock",
+    );
+  });
+
   it("registers sources with deterministic ids and log entries", async () => {
     const workspace = await tempWorkspace();
     const sourcePath = join(workspace.root, "source.md");
     await writeFile(sourcePath, "# Source\n", "utf8");
 
-    const source = await addWikiSource(workspace, { path: sourcePath, title: "LLM Wiki" });
+    const source = await addWikiSource(workspace, { path: "source.md", title: "LLM Wiki" });
 
     expect(source.id).toMatch(/^llm-wiki-[a-f0-9]{8}$/);
     await expect(readFile(source.path, "utf8")).resolves.toBe("# Source\n");
     await expect(readFile(join(workspace.root, "wiki", "log.md"), "utf8")).resolves.toContain(
       `source | LLM Wiki | ${source.id}`,
     );
+  });
+
+  it("registers sources only from regular files inside the workspace", async () => {
+    const workspace = await tempWorkspace();
+    const outside = await tempWorkspace();
+    const outsidePath = join(outside.root, "outside.md");
+    const localPath = join(workspace.root, "local-source");
+    const linkPath = join(workspace.root, "linked.md");
+    await writeFile(outsidePath, "# Outside\n", "utf8");
+    await writeFile(localPath, "# Local\n", "utf8");
+    await symlink(localPath, linkPath);
+
+    await expect(addWikiSource(workspace, { path: outsidePath, title: "Outside" })).rejects.toThrow(
+      "inside the workspace",
+    );
+    await expect(addWikiSource(workspace, { path: linkPath, title: "Linked" })).rejects.toThrow(
+      "regular file",
+    );
+    const local = await addWikiSource(workspace, { path: localPath, title: "Local" });
+    expect(local.path).toMatch(/\.md$/);
+  });
+
+  it.runIf(supportsPosixModes)("does not broaden imported source permissions", async () => {
+    const workspace = await tempWorkspace();
+    const sourcePath = join(workspace.root, "private.md");
+    await writeFile(sourcePath, "# Private\n", "utf8");
+    await chmod(sourcePath, 0o600);
+
+    const source = await addWikiSource(workspace, { path: sourcePath, title: "Private" });
+
+    expect((await stat(source.path)).mode & 0o777).toBe(0o600);
+  });
+
+  it("does not follow managed log, run, or source directory symlinks", async () => {
+    const logWorkspace = await tempWorkspace();
+    const runWorkspace = await tempWorkspace();
+    const sourceWorkspace = await tempWorkspace();
+    await Promise.all([initWiki(logWorkspace), initWiki(runWorkspace), initWiki(sourceWorkspace)]);
+    await assertLogSymlinkRejected(logWorkspace.root);
+    await assertRunDirectorySymlinkRejected(runWorkspace.root);
+    await assertSourceDirectorySymlinkRejected(sourceWorkspace.root);
   });
 
   it("prepares ingest task packets from registered sources", async () => {
@@ -100,6 +180,25 @@ describe("wiki", () => {
     );
     expect(packet.constraints).toContain(
       "Keep one main idea per sentence and split sentences that are hard to understand in one pass.",
+    );
+  });
+
+  it("rejects ingest packets for unknown sources", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+
+    await expect(prepareWikiIngest(workspace, "missing")).rejects.toThrow("Wiki source not found");
+  });
+
+  it("rejects symbolic source files when preparing ingest context", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    const outside = join(workspace.root, "outside-ingest.md");
+    await writeFile(outside, "# Outside\n", "utf8");
+    await symlink(outside, join(workspace.root, "wiki", "raw", "sources", "linked.md"));
+
+    await expect(prepareWikiIngest(workspace, "linked")).rejects.toThrow(
+      "Unsupported source reference",
     );
   });
 
@@ -247,7 +346,7 @@ describe("wiki", () => {
     expect(packet.task).toBe("query");
     expect(packet.contextFiles).toContain("pages/concepts/llm-wiki.md");
     expect(packet.prompt).toContain("How does LLM Wiki work?");
-    expect(packet.prompt).toContain("File reusable answers");
+    expect(packet.prompt).toContain("Prepare reusable answers as reviewable proposals");
   });
 
   it("prepares evolve task packets for manual or automated improvement", async () => {
@@ -277,63 +376,317 @@ describe("wiki", () => {
     expect(packet.diagnostics?.issues.map((issue) => issue.code)).toContain("broken-wiki-link");
   });
 
-  it("files reusable query answers as wiki question pages", async () => {
+  it("does not follow raw run symlinks while preparing evolve context", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    const outside = join(workspace.root, "outside-runs");
+    await mkdir(outside);
+    await writeFile(join(outside, "secret.json"), '{"secret":true}\n', "utf8");
+    await rm(join(workspace.root, "wiki", "raw", "runs"), { recursive: true });
+    await symlink(outside, join(workspace.root, "wiki", "raw", "runs"));
+
+    await expect(prepareWikiEvolve(workspace)).rejects.toThrow("symbolic link");
+  });
+
+  it("prepares deterministic answer proposals without changing the live wiki", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    const before = await wikiState(workspace.root);
+
+    const proposal = await prepareWikiAnswerProposal(workspace, answerInput(), now());
+    const repeated = await prepareWikiAnswerProposal(workspace, answerInput(), now());
+    const page = proposal.files.find((file) => file.path === questionRelativePath());
+
+    expect(proposal.id).toBe(repeated.id);
+    expect(proposal.digest).toBe(repeated.digest);
+    expect(proposal.diagnostics.issues).toEqual([]);
+    expect(page?.content).toContain("- accepted: Agents compile durable wiki pages.");
+    expect(page?.content).toContain("source: raw/sources/karpathy-llm-wiki.md");
+    expect(page?.content).not.toContain("Answer is supported by");
+    expect(page?.content.match(/source: raw\/sources\/karpathy-llm-wiki\.md/g)).toHaveLength(1);
+    expect(parseWikiPage(page?.content ?? "").metadata.sources).toEqual([
+      "raw/sources/karpathy-llm-wiki.md",
+    ]);
+    await expect(wikiState(workspace.root)).resolves.toEqual(before);
+    await expect(stat(questionPath(workspace.root))).rejects.toThrow();
+  });
+
+  it("requires explicit accepted claims in answer proposals", async () => {
     const workspace = await tempWorkspace();
     await initWiki(workspace);
     await writeRawSource(workspace.root);
 
-    const result = await fileWikiAnswer(workspace, answerInput(), now());
-
-    expect(result.lint.issues).toEqual([]);
-    await expect(readFile(questionPath(workspace.root), "utf8")).resolves.toContain(
-      "## Question\n\nHow does LLM Wiki work?",
-    );
-    await expect(readFile(join(workspace.root, "wiki", "index.md"), "utf8")).resolves.toContain(
-      "[How does LLM Wiki work?](pages/questions/how-does-llm-wiki-work.md)",
-    );
-  });
-
-  it("rejects reusable answers without sources", async () => {
-    const workspace = await tempWorkspace();
-
-    await expect(fileWikiAnswer(workspace, { ...answerInput(), sources: [] })).rejects.toThrow(
-      "requires at least one source",
-    );
-  });
-
-  it("applies validated wiki updates", async () => {
-    const workspace = await tempWorkspace();
-    await initWiki(workspace);
-    await writeRawSource(workspace.root);
-
-    const result = await applyWikiUpdate(workspace, wikiUpdate());
-
-    expect(result.lint.issues).toEqual([]);
-    await expect(readFile(pagePath(workspace.root), "utf8")).resolves.toContain("Has a source");
-  });
-
-  it("rejects unsafe or unsupported wiki updates", async () => {
-    const workspace = await tempWorkspace();
-
-    await expect(applyWikiUpdate(workspace, { files: [] })).rejects.toThrow("requires");
     await expect(
-      applyWikiUpdate(workspace, { files: [updateFile("../bad.md", "")] }),
-    ).rejects.toThrow("escapes wiki root");
+      prepareWikiAnswerProposal(workspace, { ...answerInput(), acceptedClaims: [] }),
+    ).rejects.toThrow("requires at least one accepted claim");
     await expect(
-      applyWikiUpdate(workspace, { files: [updateFile("pages/concepts/a.md", "")] }),
-    ).rejects.toThrow("must include index.md and log.md");
-    await expect(
-      applyWikiUpdate(workspace, { files: [updateFile("raw/sources/source.md", "changed")] }),
-    ).rejects.toThrow("Unsupported wiki update path");
-    await expect(
-      applyWikiUpdate(workspace, {
-        files: [
-          updateFile("index.md", "# Wiki Index\n"),
-          updateFile("log.md", "# Wiki Log\n"),
-          updateFile("pages/../raw/sources/source.md", "changed"),
-        ],
+      prepareWikiAnswerProposal(workspace, {
+        ...answerInput(),
+        acceptedClaims: [{ text: "", source: "raw/sources/karpathy-llm-wiki.md" }],
       }),
-    ).rejects.toThrow("Unsupported wiki update path");
+    ).rejects.toThrow("non-empty line");
+    await expect(
+      prepareWikiAnswerProposal(workspace, {
+        ...answerInput(),
+        acceptedClaims: [{ text: "Claim.", source: "raw/sources/missing.md" }],
+      }),
+    ).rejects.toThrow("missing");
+  });
+
+  it("does not initialize a wiki while preparing an answer proposal", async () => {
+    const workspace = await tempWorkspace();
+
+    await expect(prepareWikiAnswerProposal(workspace, answerInput())).rejects.toThrow(
+      "must be initialized",
+    );
+    await expect(stat(join(workspace.root, "wiki"))).rejects.toThrow();
+  });
+
+  it("applies only the exact approved proposal and records one audit entry", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    const proposal = await prepareWikiAnswerProposal(workspace, answerInput(), now());
+    const appliedAt = new Date("2026-06-17T13:00:00.000Z");
+
+    const result = await applyWikiProposal(workspace, proposal, approval(proposal), appliedAt);
+    const page = proposal.files.find((file) => file.path === questionRelativePath());
+    const index = proposal.files.find((file) => file.path === "index.md");
+
+    expect(result.proposalId).toBe(proposal.id);
+    expect(result.lint.issues).toEqual([]);
+    await expect(readFile(questionPath(workspace.root), "utf8")).resolves.toBe(page?.content);
+    await expect(readFile(join(workspace.root, "wiki", "index.md"), "utf8")).resolves.toBe(
+      index?.content,
+    );
+    const log = await readFile(join(workspace.root, "wiki", "log.md"), "utf8");
+    expect(log).toContain(
+      `## [${appliedAt.toISOString()}] proposal | ${proposal.id} | digest=${proposal.digest}`,
+    );
+    expect(log).toContain("reviewer=SeungIl");
+    expect(log).toContain("reviewedAt=2026-06-17T12:30:00.000Z");
+    await expect(applyWikiProposal(workspace, proposal, approval(proposal))).rejects.toThrow(
+      "already applied",
+    );
+  });
+
+  it("snapshots reviewed inputs before waiting for the write lock", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    const proposal = await prepareWikiAnswerProposal(workspace, answerInput(), now());
+    const page = proposalPage(proposal);
+    const reviewed = approval(proposal);
+    const appliedAt = new Date("2026-06-17T13:00:00.000Z");
+    const original = page.content;
+
+    const pending = applyWikiProposal(workspace, proposal, reviewed, appliedAt);
+    (page as { content: string }).content = original.replace(
+      "Agents compile durable wiki pages.",
+      "Unreviewed mutation.",
+    );
+    reviewed.reviewedBy = "Mallory";
+    appliedAt.setUTCFullYear(2000);
+    await pending;
+
+    await expect(readFile(questionPath(workspace.root), "utf8")).resolves.toBe(original);
+    const log = await readFile(join(workspace.root, "wiki", "log.md"), "utf8");
+    expect(log).toContain(`digest=${proposal.digest}`);
+    expect(log).toContain("reviewer=SeungIl");
+    expect(log).toContain("[2026-06-17T13:00:00.000Z]");
+    expect(log).not.toContain("Mallory");
+  });
+
+  it("uses the workspace root that acquired the write lock", async () => {
+    const workspace = await tempWorkspace();
+    const other = await tempWorkspace();
+    const originalRoot = workspace.root;
+    await Promise.all([initWiki(workspace), initWiki(other)]);
+    await Promise.all([writeRawSource(originalRoot), writeRawSource(other.root)]);
+    const proposal = await prepareWikiAnswerProposal(workspace, answerInput(), now());
+
+    const pending = applyWikiProposal(workspace, proposal, approval(proposal));
+    (workspace as { root: string }).root = other.root;
+    await pending;
+
+    await expect(readFile(questionPath(originalRoot), "utf8")).resolves.toContain(
+      "Agents compile durable wiki pages.",
+    );
+    await expect(stat(questionPath(other.root))).rejects.toThrow();
+  });
+
+  it("rejects malformed or tampered proposal envelopes before writing", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    const proposal = await prepareWikiAnswerProposal(workspace, answerInput(), now());
+    const before = await wikiState(workspace.root);
+
+    for (const candidate of tamperedProposals(proposal)) {
+      await expect(applyWikiProposal(workspace, candidate, approval(proposal))).rejects.toThrow();
+    }
+
+    await expect(wikiState(workspace.root)).resolves.toEqual(before);
+    await expect(stat(questionPath(workspace.root))).rejects.toThrow();
+  });
+
+  it("refiles an approved answer without duplicating its index link or createdAt", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    const first = await prepareWikiAnswerProposal(workspace, answerInput(), now());
+    await applyWikiProposal(workspace, first, approval(first));
+    const later = new Date("2026-06-18T12:00:00.000Z");
+    const second = await prepareWikiAnswerProposal(workspace, answerInput(), later);
+    const page = proposalPage(second);
+
+    expect(second.diagnostics.issues).toEqual([]);
+    expect(parseWikiPage(page.content).metadata.createdAt).toBe(now().toISOString());
+    expect(parseWikiPage(page.content).metadata.updatedAt).toBe(later.toISOString());
+    await applyWikiProposal(workspace, second, approval(second, "2026-06-18T12:30:00.000Z"));
+    const index = await readFile(join(workspace.root, "wiki", "index.md"), "utf8");
+    expect(index.match(/pages\/questions\/how-does-llm-wiki-work\.md/g)).toHaveLength(1);
+  });
+
+  it("does not mutate the wiki for a mismatched approval", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    const proposal = await prepareWikiAnswerProposal(workspace, answerInput(), now());
+    const before = await wikiState(workspace.root);
+
+    await expect(
+      applyWikiProposal(workspace, proposal, { ...approval(proposal), digest: "0".repeat(64) }),
+    ).rejects.toThrow("does not match");
+    await expect(
+      applyWikiProposal(workspace, proposal, { ...approval(proposal), reviewedBy: "" }),
+    ).rejects.toThrow("requires a reviewer");
+    await expect(
+      applyWikiProposal(workspace, proposal, { ...approval(proposal), reviewedAt: "yesterday" }),
+    ).rejects.toThrow("ISO review timestamp");
+    await expect(
+      applyWikiProposal(workspace, proposal, {
+        ...approval(proposal),
+        reviewedAt: "2026-06-17T11:00:00.000Z",
+      }),
+    ).rejects.toThrow("cannot predate");
+    await expect(wikiState(workspace.root)).resolves.toEqual(before);
+    await expect(stat(questionPath(workspace.root))).rejects.toThrow();
+  });
+
+  it("rejects stale source evidence without partially writing files", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    const proposal = await prepareWikiAnswerProposal(workspace, answerInput(), now());
+    const before = await wikiState(workspace.root);
+    await writeFile(rawSourcePath(workspace.root), "# Changed source\n", "utf8");
+
+    await expect(applyWikiProposal(workspace, proposal, approval(proposal))).rejects.toThrow(
+      "stale",
+    );
+    await expect(wikiState(workspace.root)).resolves.toEqual({
+      ...before,
+      source: "# Changed source\n",
+    });
+    await expect(stat(questionPath(workspace.root))).rejects.toThrow();
+  });
+
+  it("preserves a newer index instead of applying a stale proposal", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    const proposal = await prepareWikiAnswerProposal(workspace, answerInput(), now());
+    const manualIndex = "# Wiki Index\n\nManual edit.\n";
+    await writeFile(join(workspace.root, "wiki", "index.md"), manualIndex, "utf8");
+    const before = await wikiState(workspace.root);
+
+    await expect(applyWikiProposal(workspace, proposal, approval(proposal))).rejects.toThrow(
+      "stale",
+    );
+    await expect(wikiState(workspace.root)).resolves.toEqual(before);
+    await expect(stat(questionPath(workspace.root))).rejects.toThrow();
+  });
+
+  it("keeps lint-failing proposals out of the live wiki", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    const proposal = await prepareWikiAnswerProposal(
+      workspace,
+      { ...answerInput(), summary: "Broken link: [[missing-page]]" },
+      now(),
+    );
+    const before = await wikiState(workspace.root);
+
+    expect(proposal.diagnostics.issues.map((issue) => issue.code)).toContain("broken-wiki-link");
+    await expect(applyWikiProposal(workspace, proposal, approval(proposal))).rejects.toThrow(
+      "lint issue",
+    );
+    await expect(wikiState(workspace.root)).resolves.toEqual(before);
+    await expect(stat(questionPath(workspace.root))).rejects.toThrow();
+  });
+
+  it("reruns full candidate lint immediately before promotion", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    const proposal = await prepareWikiAnswerProposal(workspace, answerInput(), now());
+    await writeFile(pagePath(workspace.root), renderWikiPage(metadata(), goodBody()), "utf8");
+    const before = await wikiState(workspace.root);
+
+    await expect(applyWikiProposal(workspace, proposal, approval(proposal))).rejects.toThrow(
+      "lint issue",
+    );
+    await expect(wikiState(workspace.root)).resolves.toEqual(before);
+    await expect(readFile(pagePath(workspace.root), "utf8")).resolves.toContain("Has a source");
+    await expect(stat(questionPath(workspace.root))).rejects.toThrow();
+  });
+
+  it("rolls back promoted files when final validation throws", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    const proposal = await prepareWikiAnswerProposal(workspace, answerInput(), now());
+    const before = await wikiState(workspace.root);
+    let validations = 0;
+
+    await expect(
+      promoteWikiFiles(workspace, {
+        files: proposal.files,
+        auditEntry: "## [2026-06-17T12:30:00.000Z] injected validation failure",
+        validate: async (candidate) => {
+          validations += 1;
+          if (validations === 2) {
+            throw new Error("validator I/O failure");
+          }
+          return lintWiki(candidate);
+        },
+      }),
+    ).rejects.toThrow("validator I/O failure");
+    await expect(wikiState(workspace.root)).resolves.toEqual(before);
+    await expect(stat(questionPath(workspace.root))).rejects.toThrow();
+  });
+
+  it("does not overwrite a file that appears before create-only promotion", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    const path = "raw/runs/race.json";
+    const livePath = join(workspace.root, "wiki", path);
+    const logPath = join(workspace.root, "wiki", "log.md");
+    const beforeLog = await readFile(logPath, "utf8");
+
+    await expect(
+      promoteWikiFiles(workspace, {
+        files: [{ path, content: "candidate\n", createOnly: true }],
+        auditEntry: "## [2026-06-17T12:30:00.000Z] race",
+        validate: async () => ({ issues: [] }),
+        prePromote: () => writeFile(livePath, "concurrent\n", "utf8"),
+      }),
+    ).rejects.toThrow("Create-only wiki target already exists");
+    await expect(readFile(livePath, "utf8")).resolves.toBe("concurrent\n");
+    await expect(readFile(logPath, "utf8")).resolves.toBe(beforeLog);
   });
 
   it("reports source references that do not exist", async () => {
@@ -345,6 +698,124 @@ describe("wiki", () => {
     const report = await lintWiki(workspace);
 
     expect(report.issues.map((issue) => issue.code)).toContain("missing-source");
+  });
+
+  it("rejects traversal, directories, and symbolic links as source evidence", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeFile(join(workspace.root, "outside.md"), "# Outside\n", "utf8");
+    await mkdir(join(workspace.root, "outside-directory"));
+    await writeFile(join(workspace.root, "outside-directory", "nested.md"), "# Nested\n", "utf8");
+    await mkdir(join(workspace.root, "wiki", "raw", "sources", "directory.md"));
+    await symlink(
+      join(workspace.root, "outside.md"),
+      join(workspace.root, "wiki", "raw", "sources", "linked.md"),
+    );
+    await symlink(
+      join(workspace.root, "outside-directory"),
+      join(workspace.root, "wiki", "raw", "sources", "linked-directory"),
+    );
+
+    const reports = [];
+    for (const source of [
+      "raw/sources/../../../outside.md",
+      "raw/sources/directory.md",
+      "raw/sources/linked.md",
+      "raw/sources/linked-directory/nested.md",
+    ]) {
+      reports.push(await lintSingleSourcePage(workspace.root, source));
+    }
+
+    expect(reports.map((report) => report.issues[0]?.code)).toEqual([
+      "unsupported-source",
+      "unsupported-source",
+      "unsupported-source",
+      "unsupported-source",
+    ]);
+  });
+
+  it("reports a symbolic managed source root instead of trusting its realpath", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    const outside = join(workspace.root, "outside-source-root");
+    await mkdir(outside);
+    await writeFile(join(outside, "source.md"), "# Outside source\n", "utf8");
+    await rm(join(workspace.root, "wiki", "raw", "sources"), { recursive: true });
+    await symlink(outside, join(workspace.root, "wiki", "raw", "sources"));
+    await writeFile(pagePath(workspace.root), renderWikiPage(metadata(), goodBody()), "utf8");
+    await writeFile(join(workspace.root, "wiki", "index.md"), indexWithPage(), "utf8");
+
+    const report = await lintWiki(workspace);
+    expect(report.issues).toContainEqual(expect.objectContaining({ code: "unsafe-required-path" }));
+  });
+
+  it("does not follow a question-page symlink while applying a proposal", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    const proposal = await prepareWikiAnswerProposal(workspace, answerInput(), now());
+    const outside = join(workspace.root, "outside-answer.md");
+    await writeFile(outside, "sentinel\n", "utf8");
+    await symlink(outside, questionPath(workspace.root));
+    const before = await wikiState(workspace.root);
+
+    await expect(applyWikiProposal(workspace, proposal, approval(proposal))).rejects.toThrow(
+      "symbolic link",
+    );
+    await expect(readFile(outside, "utf8")).resolves.toBe("sentinel\n");
+    await expect(wikiState(workspace.root)).resolves.toEqual(before);
+  });
+
+  it("does not append candidate audit data through a live log symlink", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    const proposal = await prepareWikiAnswerProposal(workspace, answerInput(), now());
+    const beforeIndex = await readFile(join(workspace.root, "wiki", "index.md"), "utf8");
+    const outside = join(workspace.root, "outside-log.md");
+    await writeFile(outside, "sentinel\n", "utf8");
+    await rm(join(workspace.root, "wiki", "log.md"));
+    await symlink(outside, join(workspace.root, "wiki", "log.md"));
+
+    await expect(applyWikiProposal(workspace, proposal, approval(proposal))).rejects.toThrow(
+      "symbolic link",
+    );
+    await expect(readFile(outside, "utf8")).resolves.toBe("sentinel\n");
+    await expect(readFile(join(workspace.root, "wiki", "index.md"), "utf8")).resolves.toBe(
+      beforeIndex,
+    );
+    await expect(stat(questionPath(workspace.root))).rejects.toThrow();
+  });
+
+  it("reports and refuses symbolic wiki pages during lint and reads", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    const outside = join(workspace.root, "outside-page.md");
+    await writeFile(
+      outside,
+      renderWikiPage(
+        {
+          ...metadata(),
+          title: "Leaked",
+          slug: "leaked",
+          kind: "question",
+        },
+        goodBody(),
+      ),
+      "utf8",
+    );
+    await symlink(outside, join(workspace.root, "wiki", "pages", "questions", "leaked.md"));
+    await writeFile(
+      join(workspace.root, "wiki", "index.md"),
+      "# Wiki Index\n\n- [Leaked](pages/questions/leaked.md)\n",
+      "utf8",
+    );
+
+    const report = await lintWiki(workspace);
+    expect(report.issues.map((issue) => issue.code)).toContain("unsafe-page-path");
+    await expect(readWikiPage(workspace, "leaked")).rejects.toThrow("not a regular file");
+    await expect(prepareWikiQuery(workspace, "leaked")).rejects.toThrow("not a regular file");
   });
 
   it("records raw agent runs", async () => {
@@ -361,6 +832,19 @@ describe("wiki", () => {
       `run | answer | ${run.id}`,
     );
   });
+
+  it.runIf(supportsPermissionFailure)(
+    "does not leave raw files behind when an audit append fails",
+    async () => {
+      const sourceWorkspace = await tempWorkspace();
+      const runWorkspace = await tempWorkspace();
+      await Promise.all([initWiki(sourceWorkspace), initWiki(runWorkspace)]);
+      await writeFile(join(sourceWorkspace.root, "source.md"), "# Source\n", "utf8");
+
+      await assertAuditFailureRollsBackSource(sourceWorkspace.root);
+      await assertAuditFailureRollsBackRun(runWorkspace.root);
+    },
+  );
 
   it("reports missing required paths before creating a wiki", async () => {
     const workspace = await tempWorkspace();
@@ -466,9 +950,67 @@ function sourceMetadata() {
 function answerInput() {
   return {
     question: "How does LLM Wiki work?",
-    answer: "The agent maintains raw sources, compiled pages, an index, and a log.",
-    sources: ["raw/sources/karpathy-llm-wiki.md"],
+    summary: "Agents compile durable wiki pages from managed sources.",
+    acceptedClaims: [
+      {
+        text: "Agents compile durable wiki pages.",
+        source: "raw/sources/karpathy-llm-wiki.md",
+      },
+      {
+        text: "Agents compile durable wiki pages.",
+        source: "raw/sources/karpathy-llm-wiki.md",
+      },
+    ],
   };
+}
+
+function approval(proposal: WikiProposal, reviewedAt = "2026-06-17T12:30:00.000Z") {
+  return {
+    proposalId: proposal.id,
+    digest: proposal.digest,
+    accepted: true as const,
+    reviewedBy: "SeungIl",
+    reviewedAt,
+  };
+}
+
+function tamperedProposals(proposal: WikiProposal): WikiProposal[] {
+  const index = proposal.files.find((file) => file.path === "index.md");
+  const page = proposalPage(proposal);
+  if (index === undefined) {
+    throw new Error("Test proposal is missing index.md");
+  }
+  return [
+    { ...proposal, digest: "0".repeat(64) },
+    { ...proposal, id: "answer-wrong" },
+    { ...proposal, kind: "unsupported" as never },
+    { ...proposal, note: "" },
+    { ...proposal, files: [index, index] },
+    { ...proposal, files: [page, { ...page, path: "pages/questions/other.md" }] },
+    { ...proposal, files: [{ ...index, path: "../index.md" }, page] },
+    {
+      ...proposal,
+      files: [
+        index,
+        { ...page, content: page.content.replace("status: active", "status: review") },
+      ],
+    },
+    {
+      ...proposal,
+      files: [index, { ...page, content: page.content.replace("  source:", "  evidence:") }],
+    },
+    { ...proposal, baseHashes: {} },
+    { ...proposal, baseHashes: { ...proposal.baseHashes, "schema.md": "bad" } },
+    { ...proposal, sourceHashes: {} },
+  ];
+}
+
+function proposalPage(proposal: WikiProposal) {
+  const page = proposal.files.find((file) => file.path === questionRelativePath());
+  if (page === undefined) {
+    throw new Error("Test proposal is missing its question page");
+  }
+  return page;
 }
 
 function now(): Date {
@@ -491,22 +1033,8 @@ function indexWithPage(): string {
   return "# Wiki Index\n\n- [LLM Wiki](pages/concepts/llm-wiki.md)\n";
 }
 
-function wikiUpdate() {
-  return {
-    files: [
-      updateFile("index.md", indexWithPage()),
-      updateFile("log.md", "# Wiki Log\n"),
-      updateFile("pages/concepts/llm-wiki.md", renderWikiPage(metadata(), goodBody())),
-    ],
-  };
-}
-
-function updateFile(path: string, content: string) {
-  return { path, content };
-}
-
 async function writeRawSource(root: string): Promise<void> {
-  await writeFile(join(root, "wiki", "raw", "sources", "karpathy-llm-wiki.md"), "# Source\n");
+  await writeFile(rawSourcePath(root), "# Source\n");
 }
 
 function pagePath(root: string): string {
@@ -514,9 +1042,105 @@ function pagePath(root: string): string {
 }
 
 function questionPath(root: string): string {
-  return join(root, "wiki", "pages", "questions", "how-does-llm-wiki-work.md");
+  return join(root, "wiki", questionRelativePath());
 }
 
 function sourcePagePath(root: string): string {
   return join(root, "wiki", "pages", "sources", "llm-wiki.md");
+}
+
+function questionRelativePath(): string {
+  return "pages/questions/how-does-llm-wiki-work.md";
+}
+
+function rawSourcePath(root: string): string {
+  return join(root, "wiki", "raw", "sources", "karpathy-llm-wiki.md");
+}
+
+async function wikiState(root: string) {
+  return {
+    index: await readFile(join(root, "wiki", "index.md"), "utf8"),
+    log: await readFile(join(root, "wiki", "log.md"), "utf8"),
+    source: await readFile(rawSourcePath(root), "utf8"),
+  };
+}
+
+async function lintSingleSourcePage(root: string, source: string) {
+  const workspace = createWorkspace(root);
+  await writeFile(
+    pagePath(root),
+    renderWikiPage({ ...metadata(), sources: [source] }, sourceBackedBodyFor(source)),
+    "utf8",
+  );
+  await writeFile(join(root, "wiki", "index.md"), indexWithPage(), "utf8");
+  return lintWiki(workspace);
+}
+
+function sourceBackedBodyFor(source: string): string {
+  return `## Summary\n\nEvidence.\n\n## Key Claims\n\n- accepted: A claim.\n  source: ${source}\n`;
+}
+
+async function assertLogSymlinkRejected(root: string): Promise<void> {
+  const outside = join(root, "outside-log.md");
+  await writeFile(outside, "sentinel\n", "utf8");
+  await rm(join(root, "wiki", "log.md"));
+  await symlink(outside, join(root, "wiki", "log.md"));
+  await expect(
+    recordWikiRun(createWorkspace(root), { task: "answer", input: "q", output: "a" }),
+  ).rejects.toThrow("symbolic link");
+  await expect(readFile(outside, "utf8")).resolves.toBe("sentinel\n");
+}
+
+async function assertRunDirectorySymlinkRejected(root: string): Promise<void> {
+  const outside = join(root, "outside-runs");
+  await mkdir(outside);
+  await rm(join(root, "wiki", "raw", "runs"), { recursive: true });
+  await symlink(outside, join(root, "wiki", "raw", "runs"));
+  await expect(
+    recordWikiRun(createWorkspace(root), { task: "answer", input: "q", output: "a" }),
+  ).rejects.toThrow("symbolic link");
+  await expect(readdir(outside)).resolves.toEqual([]);
+}
+
+async function assertSourceDirectorySymlinkRejected(root: string): Promise<void> {
+  const outside = join(root, "outside-sources");
+  const input = join(root, "input.md");
+  await mkdir(outside);
+  await writeFile(input, "# Input\n", "utf8");
+  await rm(join(root, "wiki", "raw", "sources"), { recursive: true });
+  await symlink(outside, join(root, "wiki", "raw", "sources"));
+  await expect(
+    addWikiSource(createWorkspace(root), { path: input, title: "Input" }),
+  ).rejects.toThrow("symbolic link");
+  await expect(readdir(outside)).resolves.toEqual([]);
+}
+
+async function assertAuditFailureRollsBackSource(root: string): Promise<void> {
+  const log = join(root, "wiki", "log.md");
+  const before = await readFile(log, "utf8");
+  await chmod(log, 0o444);
+  try {
+    await expect(
+      addWikiSource(createWorkspace(root), { path: "source.md", title: "Source" }),
+    ).rejects.toThrow();
+    await expect(readdir(join(root, "wiki", "raw", "sources"))).resolves.toEqual([]);
+    await expect(readFile(log, "utf8")).resolves.toBe(before);
+  } finally {
+    await chmod(log, 0o644);
+  }
+}
+
+async function assertAuditFailureRollsBackRun(root: string): Promise<void> {
+  const log = join(root, "wiki", "log.md");
+  const before = await readFile(log, "utf8");
+  await chmod(log, 0o444);
+  try {
+    await expect(
+      recordWikiRun(createWorkspace(root), { task: "answer", input: "q", output: "a" }),
+    ).rejects.toThrow();
+    await expect(readdir(join(root, "wiki", "raw", "runs"))).resolves.toEqual([]);
+    await expect(readFile(log, "utf8")).resolves.toBe(before);
+  } finally {
+    await chmod(log, 0o644);
+  }
 }

@@ -10,8 +10,8 @@
     }
   },
   "scripts": {
-    "build": "tsup src/index.ts --format esm --dts",
-    "test": "vitest run test",
+    "build": "tsup src/index.ts --format esm && tsc -p tsconfig.json --emitDeclarationOnly",
+    "test": "vitest run --root ../.. packages/wiki/test/wiki.test.ts",
     "typecheck": "tsc -b"
   },
   "dependencies": {
