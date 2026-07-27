@@ -22,6 +22,7 @@ import {
   initWiki,
   lintWiki,
   parseWikiAnswerResult,
+  parseWikiAnswerResultForTask,
   parseWikiAnswerTask,
   parseWikiPage,
   prepareWikiAnswerProposal,
@@ -33,6 +34,7 @@ import {
   readWikiPage,
   recordWikiRun,
   renderWikiPage,
+  validateCurrentWikiAnswerTask,
 } from "../src/index.js";
 import { promoteWikiFiles } from "../src/transaction.js";
 
@@ -425,6 +427,7 @@ describe("wiki", () => {
     expect(task.contexts.every((context) => !context.path.includes(workspace.root))).toBe(true);
     expect(task.prompt).toContain("Return exactly one JSON object");
     expect(task.prompt).toContain('"sourceId":"karpathy-llm-wiki"');
+    await expect(validateCurrentWikiAnswerTask(workspace, task)).resolves.toEqual(task);
     await expect(wikiState(workspace.root)).resolves.toEqual(before);
   });
 
@@ -486,6 +489,7 @@ describe("wiki", () => {
     const task = await prepareWikiAnswerTask(workspace, answerTaskInput());
     const result = answerTaskResult(task);
 
+    expect(parseWikiAnswerResultForTask(task, result)).toEqual(result);
     expect(() => parseWikiAnswerTask({ ...task, extra: true })).toThrow("unknown");
     expect(() =>
       parseWikiAnswerTask({

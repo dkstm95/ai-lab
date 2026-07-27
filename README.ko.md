@@ -61,6 +61,17 @@ pnpm cli wiki answer task "무엇을 재사용 지식으로 남길까?" \
 # .ai-lab/wiki-exchange/task.json의 prompt를 원하는 AI에 전달한다.
 # AI가 반환한 JSON을 .ai-lab/wiki-exchange/result.json으로 저장한다.
 
+# 또는 감사한 wrapper로 result.json을 만든다. 첫 실행은 정확한 runner
+# manifest를 공개하며 두 digest가 일치하지 않으면 실행하지 않는다.
+pnpm cli wiki answer run \
+  --task task.json --out result.json \
+  --runner-id my-wrapper \
+  --runner-executable /absolute/path/to/my-wrapper \
+  --runner-args-json '[]' \
+  --accept-task-digest "<전체-task-digest>" \
+  --trust-runner my-wrapper \
+  --accept-runner-digest "<공개된-전체-runner-digest>"
+
 pnpm cli wiki answer propose \
   --task task.json --result result.json --out proposal.json
 pnpm cli wiki answer review proposal.json
@@ -68,11 +79,25 @@ pnpm cli wiki answer apply proposal.json \
   --reviewer "<이름>" --accept-digest "<검토한-전체-digest>"
 ```
 
-task에는 선택한 source 원문이 들어간다. 구독형 서비스나 다른 모델에 전달하기 전에
-내용을 확인해야 한다. 같은 result 규약을 웹 구독, 로컬 모델, 향후 신뢰된 외부 runner가
-공유한다. task와 proposal 생성은 실제 Wiki page를 바꾸지 않는다. apply는 사람이 검토한
-전체 digest를 요구한다. 이후 현재 Wiki, source hash, candidate lint, 검토한 byte를 다시
-확인하고 승격과 audit 기록을 수행한다.
+task에는 선택한 source 원문, Wiki schema와 index, 최대 5개의 관련 page가 들어간다.
+구독형 서비스나 다른 모델에 전달하기 전에 공개 내용을 확인해야 한다. 같은 엄격한 result
+규약을 웹 구독, 로컬 모델, 신뢰된 runner wrapper가 공유한다. task와 proposal 생성은 실제
+Wiki page를 바꾸지 않는다. host의 runner 흐름은 result artifact만 만들며 proposal과
+apply는 별도 명령으로 남는다.
+
+외부 runner는 ai-lab의 stdin/stdout envelope를 구현해야 한다. 공식 AI CLI가 이 규약을
+직접 구현한다고 가정하면 안 된다. provider adapter는 해당 CLI와 별도 로그인을 감싸는
+감사된 wrapper다. ai-lab은 API key를 요구하지 않지만, wrapper가 구독 또는 API 과금 중
+어느 경로를 사용했는지 증명하지도 못한다.
+
+wrapper는 sandbox가 아니라 같은 사용자 권한으로 실행되는 신뢰된 프로그램이다. 따라서
+사용자의 파일, credential, process, network에 접근하거나 이를 바꿀 수 있다. 비공개 임시
+작업 디렉터리와 새 환경변수 집합은 우발적인 노출을 줄일 뿐 그 접근을 막지 않는다.
+취소 뒤에도 runner의 독립 descendant가 남을 수 있다. 동의 전에 실행 파일과 정확한
+runner digest를 검토해야 한다. 상세 규약은 `docs/external-runner.md`에 있다.
+
+apply는 사람이 검토한 전체 digest를 요구한다. 이후 현재 Wiki, source hash, candidate
+lint, 검토한 byte를 다시 확인하고 승격과 audit 기록을 수행한다.
 
 source 선택은 신뢰된 integration이 소유한다. agent-safe tool은 source를 가져오거나 외부
 전달용 task를 만들거나 proposal을 apply할 수 없다. 경로 이탈, symbolic link, 오래된 task,
@@ -95,6 +120,7 @@ pnpm check
 - `docs/system-design.md`
 - `docs/development-guide.md`
 - `docs/testing-guide.md`
+- `docs/external-runner.md`
 - `docs/contribution-guide.md`
 - `docs/self-evolution-guide.md`
 - `docs/subbrain-design.md`

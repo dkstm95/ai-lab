@@ -33,6 +33,7 @@ export {
   wikiAnswerResultSchemaVersion,
   wikiAnswerTaskSchemaVersion,
 } from "./answer-exchange.js";
+export { parseWikiAnswerResultForTask } from "./answer-exchange.js";
 export type {
   WikiAnswerResult,
   WikiAnswerResultClaim,
@@ -305,6 +306,17 @@ export async function prepareWikiAnswerTask(
 ): Promise<WikiAnswerTask> {
   const snapshot = normalizedAnswerTaskInput(structuredClone(input));
   return withWikiWriteLock(workspace, (locked) => prepareWikiAnswerTaskLocked(locked, snapshot));
+}
+
+export async function validateCurrentWikiAnswerTask(
+  workspace: Workspace,
+  taskValue: unknown,
+): Promise<WikiAnswerTask> {
+  const task = parseWikiAnswerTask(taskValue);
+  return withWikiWriteLock(workspace, async (locked) => {
+    await assertAnswerTaskCurrent(locked, task);
+    return task;
+  });
 }
 
 async function prepareWikiAnswerTaskLocked(

@@ -1,8 +1,15 @@
+import { createHash } from "node:crypto";
 import { constants, type Stats } from "node:fs";
-import { lstat, mkdir, open } from "node:fs/promises";
-import { join } from "node:path";
+import { type FileHandle, lstat, mkdir, open, unlink } from "node:fs/promises";
+import { isAbsolute, join } from "node:path";
 import { TextDecoder } from "node:util";
-import { WikiAnswerWorkflow, type WikiProposal } from "@ai-lab/agent-runtime";
+import {
+  type ExternalRunnerConfig,
+  type WikiAnswerRunnerResult,
+  type WikiAnswerTask,
+  WikiAnswerWorkflow,
+  type WikiProposal,
+} from "@ai-lab/agent-runtime";
 import { createDefaultWorkspace, createWorkspace } from "@ai-lab/workspace";
 import type { CAC } from "cac";
 
@@ -27,9 +34,36 @@ interface ApplyOptions {
   readonly reviewer?: string;
 }
 
-interface WikiCommandOptions extends SourceOptions, TaskOptions, ProposeOptions, ApplyOptions {}
+interface RunnerOptions {
+  readonly acceptRunnerDigest?: string;
+  readonly acceptTaskDigest?: string;
+  readonly runnerArgsJson?: string;
+  readonly runnerEnv?: string;
+  readonly runnerExecutable?: string;
+  readonly runnerId?: string;
+  readonly runnerTimeoutMs?: number | string;
+  readonly trustRunner?: string;
+}
+
+interface WikiCommandOptions
+  extends SourceOptions,
+    TaskOptions,
+    ProposeOptions,
+    ApplyOptions,
+    RunnerOptions {}
+
+interface ArtifactReservation {
+  readonly handle: FileHandle;
+  readonly path: string;
+  readonly dev: number;
+  readonly ino: number;
+}
 
 const maxArtifactBytes = 8_000_000;
+const defaultRunnerTimeoutMs = 120_000;
+const runnerConsentSchemaVersion = "ai-lab.external-runner-config.v1";
+const runnerTerminationSignals: readonly NodeJS.Signals[] =
+  process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
 
 export function registerWikiCommands(cli: CAC, root?: string): void {
   cli
@@ -41,6 +75,14 @@ export function registerWikiCommands(cli: CAC, root?: string): void {
     .option("--result <file>", "AI result artifact filename")
     .option("--reviewer <name>", "Human reviewer identity")
     .option("--accept-digest <digest>", "Full reviewed proposal digest")
+    .option("--runner-id <id>", "Explicit external runner id")
+    .option("--runner-executable <path>", "Absolute external runner executable")
+    .option("--runner-args-json <json>", "Static argument JSON array, default []")
+    .option("--runner-env <names>", "Comma-separated environment name allowlist")
+    .option("--runner-timeout-ms <ms>", "External runner timeout in milliseconds")
+    .option("--accept-task-digest <digest>", "Full disclosed task digest")
+    .option("--accept-runner-digest <digest>", "Full disclosed runner config digest")
+    .option("--trust-runner <id>", "Exact disclosed runner id")
     .action((args: string[], options: WikiCommandOptions) =>
       dispatchWikiCommand(root, args, options),
     );
@@ -57,6 +99,7 @@ async function dispatchWikiCommand(
     return addSourceCommand(root, args[2] ?? "", options);
   if (route === "answer task" && args.length === 3)
     return answerTaskCommand(root, args[2] ?? "", options);
+  if (route === "answer run" && args.length === 2) return answerRunCommand(root, options);
   if (route === "answer propose" && args.length === 2) return answerProposeCommand(root, options);
   if (route === "answer review" && args.length === 3)
     return answerReviewCommand(root, args[2] ?? "");
@@ -100,6 +143,108 @@ function taskInput(question: string, options: TaskOptions) {
     sourceIds: sourceIds(requiredText(options.sources, "--sources")),
   };
   return options.title === undefined ? input : { ...input, title: options.title };
+}
+
+async function answerRunCommand(
+  root: string | undefined,
+  options: WikiCommandOptions,
+): Promise<void> {
+  const wiki = workflow(root);
+  const task = await wiki.validateTask(
+    await readArtifact(workspaceRoot(root), requiredText(options.task, "--task")),
+  );
+  await discloseAndRun(root, wiki, task, options);
+}
+
+async function discloseAndRun(
+  root: string | undefined,
+  wiki: WikiAnswerWorkflow,
+  task: WikiAnswerTask,
+  options: WikiCommandOptions,
+): Promise<void> {
+  const config = runnerConfig(options);
+  console.log(formatWikiRunnerDisclosure(task, config));
+  assertRunnerConsent(task, config, options);
+  const saved = await withTerminationAbort((signal) =>
+    runToReservedArtifact(root, requiredText(options.out, "--out"), () =>
+      runExternalTask(wiki, task, config, signal),
+    ),
+  );
+  console.log(
+    JSON.stringify(
+      { artifact: saved.artifact, taskId: task.id, runner: saved.run.runner.id },
+      null,
+      2,
+    ),
+  );
+}
+
+function runnerConfig(options: RunnerOptions): ExternalRunnerConfig {
+  const executable = requiredText(options.runnerExecutable, "--runner-executable");
+  if (!isAbsolute(executable)) {
+    throw new Error("--runner-executable must be an absolute path");
+  }
+  return {
+    provider: requiredText(options.runnerId, "--runner-id"),
+    executable,
+    args: runnerArguments(options.runnerArgsJson),
+    envAllowlist: runnerEnvironment(options.runnerEnv),
+    timeoutMs: positiveInteger(
+      options.runnerTimeoutMs ?? defaultRunnerTimeoutMs,
+      "--runner-timeout-ms",
+    ),
+  };
+}
+
+function runnerArguments(value?: string): string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value ?? "[]");
+  } catch {
+    throw new Error("--runner-args-json must be a JSON string array");
+  }
+  if (!Array.isArray(parsed) || parsed.some((argument) => typeof argument !== "string")) {
+    throw new Error("--runner-args-json must be a JSON string array");
+  }
+  return parsed;
+}
+
+function runnerEnvironment(value?: string): string[] {
+  const names = (value ?? "")
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
+  if (new Set(names).size !== names.length) {
+    throw new Error("--runner-env must not contain duplicate names");
+  }
+  return names.sort();
+}
+
+function positiveInteger(value: number | string | undefined, option: string): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${option} must be a positive integer`);
+  }
+  return parsed;
+}
+
+function assertRunnerConsent(
+  task: WikiAnswerTask,
+  config: ExternalRunnerConfig,
+  options: RunnerOptions,
+): void {
+  if (requiredText(options.acceptTaskDigest, "--accept-task-digest") !== task.digest) {
+    throw new Error("--accept-task-digest must equal the full disclosed task digest");
+  }
+  if (requiredText(options.trustRunner, "--trust-runner") !== config.provider) {
+    throw new Error("--trust-runner must equal the exact disclosed runner id");
+  }
+  if (
+    requiredText(options.acceptRunnerDigest, "--accept-runner-digest") !==
+    wikiRunnerConfigDigest(config)
+  ) {
+    throw new Error("--accept-runner-digest must equal the full disclosed runner config digest");
+  }
 }
 
 async function answerProposeCommand(
@@ -196,6 +341,141 @@ async function writeArtifactFile(path: string, content: Buffer): Promise<void> {
   }
 }
 
+async function runToReservedArtifact(
+  root: string | undefined,
+  name: string,
+  operation: () => Promise<WikiAnswerRunnerResult>,
+): Promise<{ artifact: string; run: WikiAnswerRunnerResult }> {
+  const reservation = await reserveArtifact(workspaceRoot(root), name);
+  let complete = false;
+  try {
+    const run = await operation();
+    const bytes = await writeReservedArtifact(reservation, run.result);
+    await verifyReservedArtifact(reservation, bytes);
+    complete = true;
+    return { artifact: join(".ai-lab", "wiki-exchange", name), run };
+  } finally {
+    try {
+      await reservation.handle.close();
+    } finally {
+      if (!complete) await cleanupFailedReservation(reservation);
+    }
+  }
+}
+
+async function reserveArtifact(root: string, name: string): Promise<ArtifactReservation> {
+  const path = artifactPath(await artifactDirectory(root), name);
+  const handle = await open(
+    path,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+    0o600,
+  );
+  return initializeReservation(path, handle);
+}
+
+async function initializeReservation(
+  path: string,
+  handle: FileHandle,
+): Promise<ArtifactReservation> {
+  let reservation: ArtifactReservation | undefined;
+  try {
+    const opened = await handle.stat();
+    reservation = { handle, path, dev: opened.dev, ino: opened.ino };
+    await verifyInitialReservation(reservation);
+    return reservation;
+  } catch (error) {
+    try {
+      await handle.close();
+    } finally {
+      if (reservation !== undefined) await cleanupFailedReservation(reservation);
+    }
+    throw error;
+  }
+}
+
+async function verifyInitialReservation(reservation: ArtifactReservation): Promise<void> {
+  const current = await lstat(reservation.path);
+  if (!sameReservation(current, reservation)) {
+    throw new Error("Wiki result reservation identity could not be verified");
+  }
+}
+
+async function writeReservedArtifact(
+  reservation: ArtifactReservation,
+  value: unknown,
+): Promise<number> {
+  const content = Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+  assertArtifactSize(content.byteLength);
+  await reservation.handle.writeFile(content);
+  return content.byteLength;
+}
+
+async function verifyReservedArtifact(
+  reservation: ArtifactReservation,
+  expectedBytes: number,
+): Promise<void> {
+  const current = await lstat(reservation.path).catch(missingArtifactPath);
+  const opened = await reservation.handle.stat();
+  if (
+    !sameReservation(current, reservation) ||
+    !sameReservation(opened, reservation) ||
+    current?.size !== expectedBytes ||
+    opened.size !== expectedBytes
+  ) {
+    throw new Error("Wiki result reservation was replaced or changed during write");
+  }
+}
+
+async function cleanupFailedReservation(reservation: ArtifactReservation): Promise<void> {
+  const current = await lstat(reservation.path).catch(missingArtifactPath);
+  if (current === undefined) return;
+  if (!sameReservation(current, reservation)) {
+    throw new Error("Wiki result reservation was replaced; refusing to delete another file");
+  }
+  // Node has no portable inode-conditional unlink; this is best effort inside the trusted same-user TCB.
+  await unlink(reservation.path);
+}
+
+function missingArtifactPath(error: unknown): undefined {
+  if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+  throw error;
+}
+
+function sameReservation(current: Stats | undefined, reservation: ArtifactReservation): boolean {
+  return (
+    current?.isFile() === true &&
+    !current.isSymbolicLink() &&
+    current.dev === reservation.dev &&
+    current.ino === reservation.ino
+  );
+}
+
+async function withTerminationAbort<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  const abort = () =>
+    controller.abort(new Error("External runner cancelled by termination signal"));
+  for (const signal of runnerTerminationSignals) process.once(signal, abort);
+  try {
+    return await operation(controller.signal);
+  } finally {
+    for (const signal of runnerTerminationSignals) process.off(signal, abort);
+  }
+}
+
+async function runExternalTask(
+  wiki: WikiAnswerWorkflow,
+  task: WikiAnswerTask,
+  config: ExternalRunnerConfig,
+  signal: AbortSignal,
+): Promise<WikiAnswerRunnerResult> {
+  if (signal.aborted) {
+    throw signal.reason instanceof Error
+      ? signal.reason
+      : new Error("External runner was cancelled");
+  }
+  return wiki.runTaskWithExternalRunner(task, config, { signal });
+}
+
 async function readArtifact(root: string, name: string): Promise<unknown> {
   const path = artifactPath(await artifactDirectory(root), name);
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -270,9 +550,51 @@ export function formatWikiProposalReview(proposal: WikiProposal): string {
   ].join("\n");
 }
 
+export function formatWikiRunnerDisclosure(
+  task: WikiAnswerTask,
+  config: ExternalRunnerConfig,
+): string {
+  const runner = canonicalRunnerConfig(config);
+  return safeJson({
+    action: "external-runner-disclosure",
+    warnings: [
+      "This explicitly trusted runner is part of the same-user trusted computing base, not a sandbox.",
+      "The runner may access or modify same-user files, credentials, processes, and network resources.",
+      "The host does not verify whether the runner uses subscription access or incurs API billing.",
+      "No-auto-apply constrains only the host workflow; the runner executable may have its own side effects.",
+    ],
+    runner: { ...runner, digest: wikiRunnerConfigDigest(config) },
+    task: {
+      digest: task.digest,
+      contexts: task.contexts.map((context) => ({
+        path: context.path,
+        sha256: context.sha256,
+        utf8Bytes: Buffer.byteLength(context.content, "utf8"),
+      })),
+    },
+  });
+}
+
+export function wikiRunnerConfigDigest(config: ExternalRunnerConfig): string {
+  return createHash("sha256")
+    .update(JSON.stringify(canonicalRunnerConfig(config)))
+    .digest("hex");
+}
+
+function canonicalRunnerConfig(config: ExternalRunnerConfig) {
+  return {
+    schemaVersion: runnerConsentSchemaVersion,
+    provider: config.provider,
+    executable: config.executable,
+    args: [...config.args],
+    envAllowlist: [...config.envAllowlist].sort(),
+    timeoutMs: config.timeoutMs ?? defaultRunnerTimeoutMs,
+  };
+}
+
 function safeJson(value: unknown): string {
   return JSON.stringify(value, null, 2).replace(
-    /[\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g,
+    /[\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g,
     (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
   );
 }

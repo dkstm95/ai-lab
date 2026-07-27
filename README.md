@@ -61,6 +61,17 @@ pnpm cli wiki answer task "What should remain reusable?" \
 # Give the prompt in .ai-lab/wiki-exchange/task.json to any AI.
 # Save its JSON response as .ai-lab/wiki-exchange/result.json.
 
+# Or ask an audited wrapper to produce result.json. The first invocation
+# discloses the exact runner manifest and exits unless both digests match.
+pnpm cli wiki answer run \
+  --task task.json --out result.json \
+  --runner-id my-wrapper \
+  --runner-executable /absolute/path/to/my-wrapper \
+  --runner-args-json '[]' \
+  --accept-task-digest "<full-task-digest>" \
+  --trust-runner my-wrapper \
+  --accept-runner-digest "<full-disclosed-runner-digest>"
+
 pnpm cli wiki answer propose \
   --task task.json --result result.json --out proposal.json
 pnpm cli wiki answer review proposal.json
@@ -68,10 +79,24 @@ pnpm cli wiki answer apply proposal.json \
   --reviewer "<name>" --accept-digest "<full-reviewed-digest>"
 ```
 
-The task artifact contains the selected source contents, so inspect it before sharing it with a
-subscription service or another model. The same strict result schema works with web subscriptions,
-local models, or future trusted runner adapters. Task and proposal creation do not change live Wiki
-pages. Apply requires a human-reviewed full digest, then rechecks the current Wiki, source hashes,
+The task artifact contains the selected sources, the Wiki schema and index, and up to five matched
+pages. Inspect the disclosure before sharing them with a subscription service or another model.
+The same strict result schema works with web subscriptions, local models, and trusted runner
+wrappers. Task and proposal creation do not change live Wiki pages. The host-side runner workflow
+only creates a result artifact; proposal and apply remain separate commands.
+
+An external runner must implement ai-lab's stdin/stdout envelope. Do not assume that an official AI
+CLI implements this contract directly. A provider adapter is an audited wrapper around that CLI and
+its out-of-band login. ai-lab does not request an API key, but it also cannot prove whether the
+wrapped tool used a subscription or API billing path.
+
+The wrapper is a trusted same-user executable, not a sandbox. It can access or modify files,
+credentials, processes, and the network with your OS permissions. A private temporary working
+directory and a fresh environment reduce accidental exposure but do not prevent that access.
+Runner descendants may also outlive cancellation. Review the executable and exact runner digest
+before consenting. See `docs/external-runner.md`.
+
+Apply requires a human-reviewed full digest, then rechecks the current Wiki, source hashes,
 candidate lint, and reviewed bytes before promotion and audit logging.
 
 Trusted integrations own source selection. Agent-safe tools cannot import sources, create outbound
@@ -87,6 +112,7 @@ Implement reusable code in `packages/*`, expose human-facing flows from `apps/cl
 - `docs/system-design.md`
 - `docs/development-guide.md`
 - `docs/testing-guide.md`
+- `docs/external-runner.md`
 - `docs/contribution-guide.md`
 - `docs/self-evolution-guide.md`
 - `docs/subbrain-design.md`

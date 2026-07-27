@@ -1,12 +1,19 @@
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { WikiAnswerTask, WikiProposal } from "@ai-lab/agent-runtime";
+import { fileURLToPath } from "node:url";
+import type {
+  ExternalRunnerConfig,
+  WikiAnswerResult,
+  WikiAnswerTask,
+  WikiProposal,
+} from "@ai-lab/agent-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCli } from "../src/index.js";
-import { formatWikiProposalReview } from "../src/wiki.js";
+import { formatWikiProposalReview, wikiRunnerConfigDigest } from "../src/wiki.js";
 
 const roots: string[] = [];
+const runnerFixture = fileURLToPath(new URL("./fixtures/wiki-runner.mjs", import.meta.url));
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -140,6 +147,227 @@ describe("cli", () => {
     );
   });
 
+  it("runs a trusted external runner without exposing private runner inputs", async () => {
+    const root = await tempRoot();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const stdinMarker = join(root, "stdin-must-not-run");
+    const task = await prepareRunnerTask(
+      root,
+      log,
+      `# Research\nDurable knowledge is reusable.\n$(touch ${stdinMarker})\n`,
+    );
+    const spawnMarker = join(root, "runner-spawned");
+    const shellMarker = join(root, "shell-must-not-run");
+    const before = await liveWikiState(root);
+    vi.stubEnv("ALLOWED_RUNNER_VALUE", "private-environment-value");
+
+    await runCli(
+      runnerArgv(task, "runner-result.json", spawnMarker, {
+        args: [runnerFixture, "success", spawnMarker, `; touch ${shellMarker}`],
+        env: "ALLOWED_RUNNER_VALUE",
+      }),
+      root,
+    );
+
+    const result = await artifact<WikiAnswerResult>(root, "runner-result.json");
+    const disclosure = runnerDisclosure(log);
+    expect(result).toMatchObject({
+      taskId: task.id,
+      taskDigest: task.digest,
+      summary: "Runner produced durable knowledge.",
+    });
+    expect(disclosure).toMatchObject({
+      action: "external-runner-disclosure",
+      warnings: expect.arrayContaining([
+        expect.stringContaining("not a sandbox"),
+        expect.stringContaining("API billing"),
+        expect.stringContaining("No-auto-apply"),
+      ]),
+      runner: {
+        schemaVersion: "ai-lab.external-runner-config.v1",
+        provider: "fixture-runner",
+        executable: process.execPath,
+        args: [runnerFixture, "success", spawnMarker, `; touch ${shellMarker}`],
+        envAllowlist: ["ALLOWED_RUNNER_VALUE"],
+        timeoutMs: 5000,
+        digest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      },
+      task: {
+        digest: task.digest,
+        contexts: task.contexts.map((context) => ({
+          path: context.path,
+          sha256: context.sha256,
+          utf8Bytes: Buffer.byteLength(context.content, "utf8"),
+        })),
+      },
+    });
+    const disclosed = JSON.stringify(disclosure);
+    expect(disclosed).not.toContain("Durable knowledge is reusable.");
+    expect(disclosed).toContain(`; touch ${shellMarker}`);
+    expect(disclosed).not.toContain("private-environment-value");
+    await expect(stat(spawnMarker)).resolves.toBeDefined();
+    await expect(stat(shellMarker)).rejects.toThrow();
+    await expect(stat(stdinMarker)).rejects.toThrow();
+    await expect(liveWikiState(root)).resolves.toEqual(before);
+    await expect(stat(questionPath(root))).rejects.toThrow();
+    await expect(stat(join(root, ".ai-lab", "wiki-exchange", "proposal.json"))).rejects.toThrow();
+    const resultInfo = await stat(join(root, ".ai-lab", "wiki-exchange", "runner-result.json"));
+    if (process.platform !== "win32") expect(resultInfo.mode & 0o777).toBe(0o600);
+
+    await runCli(
+      [
+        "node",
+        "ai-lab",
+        "wiki",
+        "answer",
+        "propose",
+        "--task",
+        "runner-task.json",
+        "--result",
+        "runner-result.json",
+        "--out",
+        "runner-proposal.json",
+      ],
+      root,
+    );
+    const proposal = await artifact<WikiProposal>(root, "runner-proposal.json");
+    await runCli(["node", "ai-lab", "wiki", "answer", "review", "runner-proposal.json"], root);
+    await runCli(
+      [
+        "node",
+        "ai-lab",
+        "wiki",
+        "answer",
+        "apply",
+        "runner-proposal.json",
+        "--reviewer",
+        "Reviewer",
+        "--accept-digest",
+        proposal.digest,
+      ],
+      root,
+    );
+    await expect(readFile(questionPath(root), "utf8")).resolves.toContain(
+      "Runner produced durable knowledge.",
+    );
+  });
+
+  it("does not spawn without exact consent or when the output already exists", async () => {
+    const root = await tempRoot();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const task = await prepareRunnerTask(root, log);
+    const digestMarker = join(root, "digest-spawn");
+    const trustMarker = join(root, "trust-spawn");
+    const runnerDigestMarker = join(root, "runner-digest-spawn");
+    const occupiedMarker = join(root, "occupied-spawn");
+
+    await expect(
+      runCli(
+        runnerArgv(task, "digest-result.json", digestMarker, {
+          acceptTaskDigest: "f".repeat(64),
+        }),
+        root,
+      ),
+    ).rejects.toThrow("full disclosed task digest");
+    await expect(stat(digestMarker)).rejects.toThrow();
+    await expect(
+      stat(join(root, ".ai-lab", "wiki-exchange", "digest-result.json")),
+    ).rejects.toThrow();
+
+    await expect(
+      runCli(
+        runnerArgv(task, "trust-result.json", trustMarker, { trustRunner: "other-runner" }),
+        root,
+      ),
+    ).rejects.toThrow("exact disclosed runner id");
+    await expect(stat(trustMarker)).rejects.toThrow();
+
+    await expect(
+      runCli(
+        runnerArgv(task, "runner-digest-result.json", runnerDigestMarker, {
+          acceptRunnerDigest: "f".repeat(64),
+        }),
+        root,
+      ),
+    ).rejects.toThrow("full disclosed runner config digest");
+    await expect(stat(runnerDigestMarker)).rejects.toThrow();
+
+    await writeFile(join(root, ".ai-lab", "wiki-exchange", "occupied.json"), "{}\n");
+    await expect(runCli(runnerArgv(task, "occupied.json", occupiedMarker), root)).rejects.toThrow();
+    await expect(stat(occupiedMarker)).rejects.toThrow();
+  });
+
+  it("removes its empty reservation when runner output is invalid", async () => {
+    const root = await tempRoot();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const task = await prepareRunnerTask(root, log);
+    const spawnMarker = join(root, "invalid-spawned");
+    const before = await liveWikiState(root);
+
+    await expect(
+      runCli(
+        runnerArgv(task, "invalid-result.json", spawnMarker, {
+          args: [runnerFixture, "invalid-result", spawnMarker],
+        }),
+        root,
+      ),
+    ).rejects.toThrow("unknown or missing fields");
+
+    await expect(stat(spawnMarker)).resolves.toBeDefined();
+    await expect(
+      stat(join(root, ".ai-lab", "wiki-exchange", "invalid-result.json")),
+    ).rejects.toThrow();
+    await expect(liveWikiState(root)).resolves.toEqual(before);
+    await expect(stat(questionPath(root))).rejects.toThrow();
+  });
+
+  it("does not delete a file that replaces its reserved output", async () => {
+    const root = await tempRoot();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const task = await prepareRunnerTask(root, log);
+    const spawnMarker = join(root, "replacement-spawned");
+    const output = join(root, ".ai-lab", "wiki-exchange", "replaced.json");
+    const before = await liveWikiState(root);
+
+    await expect(
+      runCli(
+        runnerArgv(task, "replaced.json", spawnMarker, {
+          args: [runnerFixture, "replace-output", spawnMarker, output],
+        }),
+        root,
+      ),
+    ).rejects.toThrow("reservation was replaced");
+
+    await expect(readFile(output, "utf8")).resolves.toBe("replacement\n");
+    await expect(stat(spawnMarker)).resolves.toBeDefined();
+    await expect(liveWikiState(root)).resolves.toEqual(before);
+  });
+
+  it.each(["SIGINT", "SIGTERM"] as const)(
+    "aborts the external runner on %s and removes its reservation",
+    async (signal) => {
+      const root = await tempRoot();
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const task = await prepareRunnerTask(root, log);
+      const name = signal.toLowerCase();
+      const spawnMarker = join(root, `${name}-spawned`);
+      const output = join(root, ".ai-lab", "wiki-exchange", `${name}-result.json`);
+      const listeners = process.listenerCount(signal);
+      const pending = runCli(
+        runnerArgv(task, `${name}-result.json`, spawnMarker, {
+          args: [runnerFixture, "timeout", spawnMarker],
+        }),
+        root,
+      );
+      const interrupt = waitForFile(spawnMarker).then(() => process.emit(signal, signal));
+
+      await expect(pending).rejects.toThrow("aborted");
+      await interrupt;
+      await expect(stat(output)).rejects.toThrow();
+      expect(process.listenerCount(signal)).toBe(listeners);
+    },
+  );
+
   it("keeps exchange artifacts inside the private workspace directory", async () => {
     const root = await tempRoot();
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -263,6 +491,122 @@ async function tempRoot(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "ai-lab-cli-"));
   roots.push(root);
   return root;
+}
+
+async function prepareRunnerTask(
+  root: string,
+  log: ReturnType<typeof vi.spyOn>,
+  sourceContent = "# Research\nDurable knowledge is reusable.\n",
+): Promise<WikiAnswerTask> {
+  await writeFile(join(root, "source.md"), sourceContent);
+  await runCli(["node", "ai-lab", "wiki", "init"], root);
+  await runCli(
+    ["node", "ai-lab", "wiki", "source", "add", "source.md", "--title", "Research"],
+    root,
+  );
+  const source = loggedJson<{ id: string }>(log);
+  await runCli(
+    [
+      "node",
+      "ai-lab",
+      "wiki",
+      "answer",
+      "task",
+      "What is durable knowledge?",
+      "--sources",
+      source.id,
+      "--out",
+      "runner-task.json",
+    ],
+    root,
+  );
+  return artifact(root, "runner-task.json");
+}
+
+interface RunnerArgvOverrides {
+  readonly acceptRunnerDigest?: string;
+  readonly acceptTaskDigest?: string;
+  readonly args?: readonly string[];
+  readonly env?: string;
+  readonly trustRunner?: string;
+}
+
+function runnerArgv(
+  task: WikiAnswerTask,
+  out: string,
+  spawnMarker: string,
+  overrides: RunnerArgvOverrides = {},
+): string[] {
+  const args = overrides.args ?? [runnerFixture, "success", spawnMarker];
+  const config = runnerTestConfig(args, overrides.env);
+  const argv = [
+    "node",
+    "ai-lab",
+    "wiki",
+    "answer",
+    "run",
+    "--task",
+    "runner-task.json",
+    "--out",
+    out,
+    "--runner-id",
+    "fixture-runner",
+    "--runner-executable",
+    process.execPath,
+    "--runner-args-json",
+    JSON.stringify(args),
+    "--runner-timeout-ms",
+    "5000",
+    "--accept-task-digest",
+    overrides.acceptTaskDigest ?? task.digest,
+    "--accept-runner-digest",
+    overrides.acceptRunnerDigest ?? wikiRunnerConfigDigest(config),
+    "--trust-runner",
+    overrides.trustRunner ?? "fixture-runner",
+  ];
+  return overrides.env === undefined ? argv : [...argv, "--runner-env", overrides.env];
+}
+
+function runnerTestConfig(args: readonly string[], env?: string): ExternalRunnerConfig {
+  return {
+    provider: "fixture-runner",
+    executable: process.execPath,
+    args,
+    envAllowlist: (env ?? "")
+      .split(",")
+      .map((name) => name.trim())
+      .filter(Boolean)
+      .sort(),
+    timeoutMs: 5000,
+  };
+}
+
+function runnerDisclosure(log: ReturnType<typeof vi.spyOn>) {
+  const value = log.mock.calls
+    .map((call) => String(call[0]))
+    .find((entry) => entry.includes('"external-runner-disclosure"'));
+  if (value === undefined) throw new Error("Test runner disclosure was not logged");
+  return JSON.parse(value) as unknown;
+}
+
+async function liveWikiState(root: string) {
+  return {
+    index: await readFile(join(root, "wiki", "index.md"), "utf8"),
+    log: await readFile(join(root, "wiki", "log.md"), "utf8"),
+  };
+}
+
+async function waitForFile(path: string): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (
+      await stat(path)
+        .then(() => true)
+        .catch(() => false)
+    )
+      return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for test file: ${path}`);
 }
 
 function loggedJson<T>(log: ReturnType<typeof vi.spyOn>): T {

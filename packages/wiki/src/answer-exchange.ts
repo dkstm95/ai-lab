@@ -114,13 +114,18 @@ export function parseWikiAnswerResult(value: unknown): WikiAnswerResult {
   return result;
 }
 
+export function parseWikiAnswerResultForTask(
+  taskValue: unknown,
+  resultValue: unknown,
+): WikiAnswerResult {
+  return parsedWikiAnswerExchange(taskValue, resultValue).result;
+}
+
 export function answerDraftFromExchange(
   taskValue: unknown,
   resultValue: unknown,
 ): WikiAnswerProposalDraft {
-  const task = parseWikiAnswerTask(taskValue);
-  const result = parseWikiAnswerResult(resultValue);
-  assertResultMatchesTask(task, result);
+  const { task, result } = parsedWikiAnswerExchange(taskValue, resultValue);
   const draft = {
     question: task.question,
     summary: result.summary,
@@ -130,6 +135,13 @@ export function answerDraftFromExchange(
     })),
   };
   return task.title === undefined ? draft : { ...draft, title: task.title };
+}
+
+function parsedWikiAnswerExchange(taskValue: unknown, resultValue: unknown) {
+  const task = parseWikiAnswerTask(taskValue);
+  const result = parseWikiAnswerResult(resultValue);
+  assertResultMatchesTask(task, result);
+  return { task, result };
 }
 
 function normalizedTaskCore(input: BuildWikiAnswerTaskInput): WikiAnswerTaskCore {

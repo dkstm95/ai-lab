@@ -38,7 +38,21 @@ Useful environment variables:
 - `AI_LAB_WORKSPACE_ROOT`: workspace root for local files.
 - `AI_LAB_SERVICE_PORT`: local service port, default `3000`.
 
-API providers and subscription/external runner providers are intentionally excluded from the default verification path.
+API providers and real subscription CLIs are intentionally excluded from the default verification
+path. The external-runner process boundary is covered by local fixture executables only.
+
+## External Runner Development
+
+The implemented external runner is a protocol primitive, not a vendor adapter. Read
+`docs/external-runner.md` before adding a wrapper.
+
+- Keep provider-specific flags and login behavior inside a separately audited wrapper.
+- Never load an executable or arguments from a Wiki task, model output, or workspace runner config.
+- Do not place prompts or credentials in command arguments.
+- Preserve the strict request/response envelope and result-only Wiki boundary.
+- Use local fixtures for tests. Do not consume network, API, or subscription quota.
+- Treat the wrapper as trusted same-user code unless it runs under a separately enforced OS
+  sandbox.
 
 ## Tooling Notes
 

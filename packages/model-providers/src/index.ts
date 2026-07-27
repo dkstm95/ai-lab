@@ -1,10 +1,25 @@
 import { profileForTask } from "@ai-lab/config";
 import type { ModelProfile, ModelRequest, ModelResponse, ModelTask } from "@ai-lab/protocol";
 
+export {
+  ExternalRunnerModelProvider,
+  externalRunnerProtocol,
+  externalRunnerProtocolVersion,
+} from "./external-runner.js";
+export type {
+  ExternalRunnerConfig,
+  ExternalRunnerRequestEnvelope,
+  ExternalRunnerResponseEnvelope,
+} from "./external-runner.js";
+
 export interface ModelProvider {
   readonly kind: ModelProfile["kind"];
   readonly provider: string;
-  generate(request: ModelRequest, profile: ModelProfile): Promise<ModelResponse>;
+  generate(
+    request: ModelRequest,
+    profile: ModelProfile,
+    signal?: AbortSignal,
+  ): Promise<ModelResponse>;
 }
 
 export class FakeModelProvider implements ModelProvider {
@@ -35,7 +50,7 @@ export class ModelRouter {
     this.profiles = args.profiles;
   }
 
-  async generate(request: ModelRequest): Promise<ModelResponse> {
+  async generate(request: ModelRequest, signal?: AbortSignal): Promise<ModelResponse> {
     const profile = profileForTask(this.profiles, request.task);
     const provider = this.providers.find(
       (candidate) => candidate.kind === profile.kind && candidate.provider === profile.provider,
@@ -43,7 +58,7 @@ export class ModelRouter {
     if (!provider) {
       throw new Error(`No model provider registered for ${profile.kind}:${profile.provider}`);
     }
-    return provider.generate(request, profile);
+    return provider.generate(request, profile, signal);
   }
 }
 
