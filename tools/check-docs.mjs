@@ -9,6 +9,7 @@ const requiredFiles = [
   "docs/development-guide.md",
   "docs/testing-guide.md",
   "docs/contribution-guide.md",
+  "docs/wiki-rebuild.md",
   "package.json",
 ];
 
@@ -22,6 +23,7 @@ const requiredRootScripts = [
   "format:write",
   "lint",
   "service:dev",
+  "smoke:dist",
   "test",
   "typecheck",
 ];
@@ -57,6 +59,7 @@ for (const command of [
   "pnpm typecheck",
   "pnpm lint",
   "pnpm code:shape",
+  "pnpm smoke:dist",
   "pnpm coverage",
   "pnpm build",
   "pnpm check",
@@ -114,6 +117,7 @@ for (const file of [
   "docs/development-guide.md",
   "docs/testing-guide.md",
   "docs/contribution-guide.md",
+  "docs/wiki-rebuild.md",
 ]) {
   assert(docs.agents.includes(file), `AGENTS.md must include ${file} in the document map`);
 }

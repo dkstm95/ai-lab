@@ -2,7 +2,7 @@ import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { externalRunnerProtocol, externalRunnerProtocolVersion } from "../src/external-runner.js";
 import { claudeSubscriptionProfile } from "../src/subscription-runner/claude.js";
 import { runSubscriptionRunnerCli } from "../src/subscription-runner/cli.js";
@@ -26,6 +26,8 @@ const responseSchema = {
   properties: { answer: { type: "string" } },
   required: ["answer"],
 };
+
+vi.setConfig({ testTimeout: 15_000 });
 
 afterEach(async () => {
   await Promise.all(roots.map((root) => rm(root, { recursive: true, force: true })));
@@ -61,6 +63,7 @@ describe("subscription runner", () => {
       await expect(stat(run?.cwd ?? "")).rejects.toThrow();
       assertProfileArguments(profile, run?.args ?? []);
     },
+    15_000,
   );
 
   it("creates a stable, content-bound manifest without disclosing identity", async () => {

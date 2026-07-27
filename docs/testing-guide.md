@@ -28,6 +28,10 @@ creation and proposal preparation leave the live Wiki unchanged, stale or forged
 source IDs remain bound to selected evidence, and only an exact human-approved digest is promoted.
 CLI tests must not open a browser, call an API, or invoke a subscription tool.
 
+Shadow rebuild tests keep baseline pages hidden from task contexts, bind schema, index, source, and
+target hashes, compare candidates only in a temporary Wiki copy, and prove that no apply route
+exists.
+
 External-runner tests verify strict envelopes, request binding, fatal UTF-8, byte and time limits,
 fresh environment construction, sensitive environment-name rejection, no-shell argument handling,
 temporary directory cleanup, cancellation, bounded inherited-pipe settlement, and generic process
@@ -52,10 +56,13 @@ Coverage uses Vitest's V8 provider. `pnpm check` fails below 90% for branches, f
 ```bash
 pnpm code:shape
 pnpm docs:check
+pnpm smoke:dist
 pnpm check
 ```
 
 `pnpm docs:check` verifies that required guides exist, root scripts are documented, package responsibilities are covered in the system design, and `AGENTS.md` points to the current document map.
+`pnpm smoke:dist` runs the built main CLI and standalone subscription runner so bundling cannot
+silently activate the wrong process entrypoint.
 
 ## References
 

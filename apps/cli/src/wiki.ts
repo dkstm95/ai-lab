@@ -9,6 +9,8 @@ import {
   type WikiAnswerTask,
   WikiAnswerWorkflow,
   type WikiProposal,
+  type WikiRebuildReport,
+  WikiRebuildWorkflow,
   externalRunnerFileSha256,
 } from "@ai-lab/agent-runtime";
 import { createDefaultWorkspace, createWorkspace } from "@ai-lab/workspace";
@@ -108,6 +110,10 @@ async function dispatchWikiCommand(
     return answerReviewCommand(root, args[2] ?? "");
   if (route === "answer apply" && args.length === 3)
     return answerApplyCommand(root, args[2] ?? "", options);
+  if (route === "rebuild task" && args.length === 2) return rebuildTaskCommand(root, options);
+  if (route === "rebuild compare" && args.length === 2) return rebuildCompareCommand(root, options);
+  if (route === "rebuild review" && args.length === 3)
+    return rebuildReviewCommand(root, args[2] ?? "");
   throw new Error(`Unknown wiki command: wiki ${args.join(" ")}`);
 }
 
@@ -322,8 +328,62 @@ async function answerApplyCommand(
   console.log(JSON.stringify(result, null, 2));
 }
 
+async function rebuildTaskCommand(root: string | undefined, options: TaskOptions): Promise<void> {
+  const task = await rebuildWorkflow(root).prepareTask({
+    sourceIds: sourceIds(requiredText(options.sources, "--sources")),
+  });
+  const artifact = await writeArtifact(
+    workspaceRoot(root),
+    requiredText(options.out, "--out"),
+    task,
+  );
+  console.log(
+    JSON.stringify(
+      { artifact, id: task.id, digest: task.digest, targets: task.targets.map(({ path }) => path) },
+      null,
+      2,
+    ),
+  );
+}
+
+async function rebuildCompareCommand(
+  root: string | undefined,
+  options: ProposeOptions,
+): Promise<void> {
+  const [task, result] = await Promise.all([
+    readArtifact(workspaceRoot(root), requiredText(options.task, "--task")),
+    readArtifact(workspaceRoot(root), requiredText(options.result, "--result")),
+  ]);
+  const report = await rebuildWorkflow(root).prepareReport(task, result);
+  await writeRebuildReportArtifact(root, options, report);
+}
+
+async function writeRebuildReportArtifact(
+  root: string | undefined,
+  options: ProposeOptions,
+  report: WikiRebuildReport,
+): Promise<void> {
+  const artifact = await writeArtifact(
+    workspaceRoot(root),
+    requiredText(options.out, "--out"),
+    report,
+  );
+  console.log(JSON.stringify({ artifact, id: report.id, digest: report.digest }, null, 2));
+}
+
+async function rebuildReviewCommand(root: string | undefined, name: string): Promise<void> {
+  const report = rebuildWorkflow(root).reviewReport(await readArtifact(workspaceRoot(root), name));
+  console.log(formatWikiRebuildReview(report));
+}
+
 function workflow(root?: string): WikiAnswerWorkflow {
   return new WikiAnswerWorkflow(
+    root === undefined ? createDefaultWorkspace() : createWorkspace(root),
+  );
+}
+
+function rebuildWorkflow(root?: string): WikiRebuildWorkflow {
+  return new WikiRebuildWorkflow(
     root === undefined ? createDefaultWorkspace() : createWorkspace(root),
   );
 }
@@ -577,6 +637,15 @@ export function formatWikiProposalReview(proposal: WikiProposal): string {
     "Review this exact proposal value. Terminal control and direction characters are escaped.",
     safeJson(proposal),
     `Digest: ${proposal.digest}`,
+  ].join("\n");
+}
+
+export function formatWikiRebuildReview(report: WikiRebuildReport): string {
+  return [
+    "Review this exact shadow rebuild report. It cannot be applied by this workflow.",
+    "Terminal control and direction characters are escaped.",
+    safeJson(report),
+    `Digest: ${report.digest}`,
   ].join("\n");
 }
 

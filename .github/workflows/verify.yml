@@ -18,5 +18,19 @@ jobs:
         with:
           node-version: "22"
           cache: pnpm
+      - name: Prepare a private Node executable
+        shell: bash
+        run: |
+          secure_node_dir="${RUNNER_TEMP}/ai-lab-node/bin"
+          install -d -m 700 "$secure_node_dir"
+          install -m 700 "$(node -p 'process.execPath')" "$secure_node_dir/node"
+          "$secure_node_dir/node" -e '
+            const { lstatSync } = require("node:fs");
+            const file = lstatSync(process.execPath);
+            if (!file.isFile() || file.isSymbolicLink() || (file.mode & 0o022) !== 0) {
+              throw new Error(`Unsafe CI Node executable: ${process.execPath}`);
+            }
+          '
+          printf '%s\n' "$secure_node_dir" >> "$GITHUB_PATH"
       - run: pnpm install --frozen-lockfile
       - run: scripts/verify.sh

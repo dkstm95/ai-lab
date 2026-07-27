@@ -104,6 +104,9 @@ before consenting. See `docs/external-runner.md`.
 Apply requires a human-reviewed full digest, then rechecks the current Wiki, source hashes,
 candidate lint, and reviewed bytes before promotion and audit logging.
 
+Existing source and concept pages can also be regenerated as non-mutating shadow candidates and
+compared with their baseline. See `docs/wiki-rebuild.md`; this flow intentionally has no apply step.
+
 Trusted integrations own source selection. Agent-safe tools cannot import sources, create outbound
 tasks, or apply proposals. The package rejects traversal, symbolic links, stale tasks, unknown
 evidence IDs, oversized artifacts, and malformed exchange data.

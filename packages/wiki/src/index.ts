@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { lstat, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
-import { extname, join, posix, relative } from "node:path";
+import { extname, isAbsolute, join, posix, relative } from "node:path";
 import { type Workspace, slugify } from "@ai-lab/workspace";
 import {
   type WikiAnswerProposalDraft,
@@ -11,6 +11,19 @@ import {
   parseWikiAnswerResult,
   parseWikiAnswerTask,
 } from "./answer-exchange.js";
+import {
+  type WikiRebuildClaim,
+  type WikiRebuildComparison,
+  type WikiRebuildFile,
+  type WikiRebuildReport,
+  type WikiRebuildResult,
+  type WikiRebuildTarget,
+  type WikiRebuildTask,
+  buildWikiRebuildReport,
+  buildWikiRebuildTask,
+  parseWikiRebuildResultForTask,
+  parseWikiRebuildTask,
+} from "./rebuild-exchange.js";
 import {
   WikiCandidateValidationError,
   type WikiPathExpectation,
@@ -42,6 +55,27 @@ export type {
   WikiAnswerTaskContext,
   WikiAnswerTaskEvidence,
 } from "./answer-exchange.js";
+export {
+  parseWikiRebuildReport,
+  parseWikiRebuildResult,
+  parseWikiRebuildResultForTask,
+  parseWikiRebuildTask,
+  wikiRebuildReportSchemaVersion,
+  wikiRebuildResultJsonSchema,
+  wikiRebuildResultSchemaVersion,
+  wikiRebuildTaskSchemaVersion,
+} from "./rebuild-exchange.js";
+export type {
+  WikiRebuildClaim,
+  WikiRebuildComparison,
+  WikiRebuildFile,
+  WikiRebuildReport,
+  WikiRebuildResult,
+  WikiRebuildResultClaim,
+  WikiRebuildResultPage,
+  WikiRebuildTarget,
+  WikiRebuildTask,
+} from "./rebuild-exchange.js";
 
 export {
   WikiCandidateValidationError,
@@ -160,6 +194,10 @@ export interface PrepareWikiAnswerTaskInput {
   readonly question: string;
   readonly sourceIds: readonly string[];
   readonly title?: string;
+}
+
+export interface PrepareWikiRebuildTaskInput {
+  readonly sourceIds: readonly string[];
 }
 
 export interface WikiProposal {
@@ -299,6 +337,41 @@ export async function prepareWikiEvolve(workspace: Workspace): Promise<WikiTaskP
     recentRunFiles(workspace),
   ]);
   return validatedTaskPacket(workspace, evolvePacket(workspace, pages, report, runs));
+}
+
+export async function prepareWikiRebuildTask(
+  workspace: Workspace,
+  input: PrepareWikiRebuildTaskInput,
+  now: Date = new Date(),
+): Promise<WikiRebuildTask> {
+  const sourceIds = normalizedRebuildSourceIds(input.sourceIds);
+  const generatedAt = new Date(now.getTime());
+  return withWikiWriteLock(workspace, (locked) =>
+    prepareWikiRebuildTaskLocked(locked, sourceIds, generatedAt),
+  );
+}
+
+export async function validateCurrentWikiRebuildTask(
+  workspace: Workspace,
+  value: unknown,
+): Promise<WikiRebuildTask> {
+  const task = parseWikiRebuildTask(value);
+  return withWikiWriteLock(workspace, async (locked) => {
+    await assertRebuildTaskCurrent(locked, task);
+    return task;
+  });
+}
+
+export async function prepareWikiRebuildReport(
+  workspace: Workspace,
+  taskValue: unknown,
+  resultValue: unknown,
+): Promise<WikiRebuildReport> {
+  const task = parseWikiRebuildTask(taskValue);
+  const result = parseWikiRebuildResultForTask(task, resultValue);
+  return withWikiWriteLock(workspace, (locked) =>
+    prepareWikiRebuildReportLocked(locked, task, result),
+  );
 }
 
 export async function prepareWikiAnswerTask(
@@ -641,6 +714,361 @@ async function assertAnswerTaskCurrent(workspace: Workspace, task: WikiAnswerTas
   if (current.digest !== task.digest) {
     throw new Error("Wiki answer task is stale or was not prepared from the current wiki");
   }
+}
+
+function normalizedRebuildSourceIds(value: readonly string[]): string[] {
+  if (!Array.isArray(value) || value.some((sourceId) => typeof sourceId !== "string")) {
+    throw new Error("Wiki rebuild task requires at least one valid source id");
+  }
+  const sourceIds = unique(value.map((sourceId) => sourceId.trim())).sort();
+  if (!validTaskSources(sourceIds)) {
+    throw new Error("Wiki rebuild task requires at least one valid source id");
+  }
+  return sourceIds;
+}
+
+async function prepareWikiRebuildTaskLocked(
+  workspace: Workspace,
+  sourceIds: readonly string[],
+  generatedAt: Date,
+): Promise<WikiRebuildTask> {
+  await assertInitializedWiki(workspace);
+  const basis = await rebuildBasis(workspace, sourceIds);
+  const targets = rebuildTargets(workspace, basis.pages, basis.evidence);
+  return buildWikiRebuildTask({
+    generatedAt: generatedAt.toISOString(),
+    instructions: rebuildInstructions(),
+    contexts: await rebuildContexts(workspace, basis.evidence),
+    evidence: basis.evidence,
+    targets,
+    allowedLinks: unique(basis.pages.map((page) => page.metadata.slug)).sort(),
+  });
+}
+
+async function rebuildBasis(workspace: Workspace, sourceIds: readonly string[]) {
+  const [pages, evidence] = await Promise.all([
+    listWikiPages(workspace),
+    answerTaskEvidence(workspace, sourceIds),
+  ]);
+  return { pages, evidence };
+}
+
+async function rebuildContexts(workspace: Workspace, evidence: readonly WikiAnswerTaskEvidence[]) {
+  return readWikiContextFiles(workspace, [
+    "schema.md",
+    "index.md",
+    ...evidence.map((source) => source.path),
+  ]);
+}
+
+function rebuildTargets(
+  workspace: Workspace,
+  pages: readonly WikiPage[],
+  evidence: readonly WikiAnswerTaskEvidence[],
+): WikiRebuildTarget[] {
+  const paths = new Set(evidence.map((source) => source.path));
+  const targets = pages
+    .filter((page) => rebuildTargetPage(page, paths))
+    .map((page) => rebuildTarget(workspace, page))
+    .sort((left, right) => left.path.localeCompare(right.path));
+  assertRebuildTargetCoverage(targets);
+  return targets;
+}
+
+function rebuildTargetPage(page: WikiPage, sources: ReadonlySet<string>): boolean {
+  return (
+    (page.metadata.kind === "source" || page.metadata.kind === "concept") &&
+    page.metadata.sources.some((source) => sources.has(source))
+  );
+}
+
+function rebuildTarget(workspace: Workspace, page: WikiPage): WikiRebuildTarget {
+  const target = {
+    path: relativeWikiPath(workspace, page.path),
+    title: page.metadata.title,
+    slug: page.metadata.slug,
+    kind: page.metadata.kind as "source" | "concept",
+    status: page.metadata.status,
+    createdAt: page.metadata.createdAt,
+    baselineSha256: sha256(page.content),
+  };
+  return page.metadata.reviewAfter === undefined
+    ? target
+    : { ...target, reviewAfter: page.metadata.reviewAfter };
+}
+
+function assertRebuildTargetCoverage(targets: readonly WikiRebuildTarget[]): void {
+  if (
+    targets.length === 0 ||
+    targets.length > 10 ||
+    !targets.some((target) => target.kind === "source") ||
+    !targets.some((target) => target.kind === "concept")
+  ) {
+    throw new Error("Wiki rebuild v1 requires one to ten existing source and concept pages");
+  }
+}
+
+function rebuildInstructions(): string[] {
+  return [
+    "Use only the selected managed sources for accepted claims.",
+    "Preserve distinct operating models, practices, risks, and tradeoffs before compression.",
+    "Write one concise summary, explicit accepted claims, and useful Wiki links per target.",
+    "Keep summary and claim text to one line each; put Wiki links only in the links field.",
+    "Return every target exactly once in canonical path order.",
+    ...writingConstraints(),
+    "Keep one main idea per sentence and split sentences that are hard to understand in one pass.",
+  ];
+}
+
+async function assertRebuildTaskCurrent(
+  workspace: Workspace,
+  task: WikiRebuildTask,
+): Promise<void> {
+  const current = await prepareWikiRebuildTaskLocked(
+    workspace,
+    task.evidence.map((source) => source.id),
+    new Date(task.generatedAt),
+  );
+  if (current.digest !== task.digest) {
+    throw new Error("Wiki rebuild task is stale or was not prepared from the current wiki");
+  }
+}
+
+async function prepareWikiRebuildReportLocked(
+  workspace: Workspace,
+  task: WikiRebuildTask,
+  result: WikiRebuildResult,
+): Promise<WikiRebuildReport> {
+  await assertRebuildTaskCurrent(workspace, task);
+  const files = rebuildCandidateFiles(task, result);
+  const reports = await rebuildLintReports(workspace, files, task.generatedAt);
+  const comparisons = await rebuildComparisons(workspace, files);
+  return buildWikiRebuildReport({
+    schemaVersion: "ai-lab.wiki-rebuild-report.v1",
+    taskId: task.id,
+    taskDigest: task.digest,
+    generatedAt: task.generatedAt,
+    files,
+    comparisons,
+    baselineDiagnostics: reports.baseline,
+    candidateDiagnostics: reports.candidate,
+    introducedIssues: issueDifference(reports.candidate.issues, reports.baseline.issues),
+    resolvedIssues: issueDifference(reports.baseline.issues, reports.candidate.issues),
+  });
+}
+
+function rebuildCandidateFiles(
+  task: WikiRebuildTask,
+  result: WikiRebuildResult,
+): WikiRebuildFile[] {
+  return result.pages.map((page) => rebuildCandidateFile(task, page));
+}
+
+function rebuildCandidateFile(
+  task: WikiRebuildTask,
+  page: WikiRebuildResult["pages"][number],
+): WikiRebuildFile {
+  const target = task.targets.find((candidate) => candidate.path === page.path);
+  if (target === undefined) throw new Error("Wiki rebuild result target is missing");
+  const claims = page.acceptedClaims.map((claim) => rebuildClaim(task, claim));
+  const metadata = rebuildMetadata(task, target, claims);
+  return {
+    path: target.path,
+    content: renderWikiPage(metadata, rebuildBody(page.summary, claims, page.links)),
+  };
+}
+
+function rebuildClaim(
+  task: WikiRebuildTask,
+  claim: WikiRebuildResult["pages"][number]["acceptedClaims"][number],
+): WikiAcceptedClaim {
+  const source = task.evidence.find((candidate) => candidate.id === claim.sourceId);
+  if (source === undefined) throw new Error("Wiki rebuild result cites an unknown source id");
+  return { text: claim.text, source: source.path };
+}
+
+function rebuildMetadata(
+  task: WikiRebuildTask,
+  target: WikiRebuildTarget,
+  claims: readonly WikiAcceptedClaim[],
+): WikiPageMetadata {
+  const metadata = {
+    title: target.title,
+    slug: target.slug,
+    kind: target.kind,
+    status: target.status,
+    createdAt: target.createdAt,
+    updatedAt: task.generatedAt,
+    sources: unique(claims.map((claim) => claim.source)),
+  };
+  return target.reviewAfter === undefined
+    ? metadata
+    : { ...metadata, reviewAfter: target.reviewAfter };
+}
+
+function rebuildBody(
+  summary: string,
+  claims: readonly WikiAcceptedClaim[],
+  links: readonly string[],
+): string {
+  const renderedLinks = links.map((link) => `- [[${link}]]`).join("\n");
+  return `## Summary\n\n${summary.trim()}\n\n## Key Claims\n\n${answerClaims(claims)}\n\n## Links\n\n${renderedLinks}\n`;
+}
+
+async function rebuildLintReports(
+  workspace: Workspace,
+  files: readonly WikiRebuildFile[],
+  generatedAt: string,
+) {
+  const now = new Date(generatedAt);
+  const [baseline, candidate] = await Promise.all([
+    lintWiki(workspace, now),
+    previewWikiFiles(workspace, files, (preview) => lintWiki(preview, now)),
+  ]);
+  return {
+    baseline: portableWikiLintReport(workspace, baseline),
+    candidate: portableWikiLintReport(workspace, candidate),
+  };
+}
+
+function portableWikiLintReport(workspace: Workspace, report: WikiLintReport): WikiLintReport {
+  return {
+    issues: report.issues.map((candidate) => ({
+      ...candidate,
+      path: portableWikiIssuePath(workspace, candidate.path),
+    })),
+  };
+}
+
+function portableWikiIssuePath(workspace: Workspace, path: string): string {
+  const localPath = isAbsolute(path) ? relativeWikiPath(workspace, path) : path;
+  const normalized = posix.normalize(localPath.replaceAll("\\", "/"));
+  if (normalized === ".." || normalized.startsWith("../") || posix.isAbsolute(normalized)) {
+    throw new Error("Wiki rebuild diagnostic path escapes the wiki root");
+  }
+  return normalized === "" ? "." : normalized;
+}
+
+async function rebuildComparisons(
+  workspace: Workspace,
+  files: readonly WikiRebuildFile[],
+): Promise<WikiRebuildComparison[]> {
+  return Promise.all(files.map((file) => rebuildComparison(workspace, file)));
+}
+
+async function rebuildComparison(
+  workspace: Workspace,
+  file: WikiRebuildFile,
+): Promise<WikiRebuildComparison> {
+  const baselineContent = await readFile(wikiPath(workspace, file.path), "utf8");
+  const baseline = parseWikiPage(baselineContent, file.path);
+  const candidate = parseWikiPage(file.content, file.path);
+  return compareRebuildPages(file.path, baseline, candidate);
+}
+
+function compareRebuildPages(
+  path: string,
+  baseline: WikiPage,
+  candidate: WikiPage,
+): WikiRebuildComparison {
+  return {
+    path,
+    changed: baseline.content !== candidate.content,
+    baselineSha256: sha256(baseline.content),
+    candidateSha256: sha256(candidate.content),
+    ...compareRebuildClaims(baseline, candidate),
+    ...compareRebuildLinks(baseline, candidate),
+    ...compareRebuildSources(baseline, candidate),
+  };
+}
+
+function compareRebuildClaims(baseline: WikiPage, candidate: WikiPage) {
+  const baselineClaims = rebuildClaims(baseline);
+  const candidateClaims = rebuildClaims(candidate);
+  return {
+    baselineClaimCount: baselineClaims.length,
+    candidateClaimCount: candidateClaims.length,
+    retainedClaimCount: retainedClaimCount(baselineClaims, candidateClaims),
+    missingClaims: claimDifference(baselineClaims, candidateClaims),
+    addedClaims: claimDifference(candidateClaims, baselineClaims),
+  };
+}
+
+function compareRebuildLinks(baseline: WikiPage, candidate: WikiPage) {
+  const baselineLinks = unique(wikiLinks(baseline.content)).sort();
+  const candidateLinks = unique(wikiLinks(candidate.content)).sort();
+  return {
+    baselineLinks,
+    candidateLinks,
+    missingLinks: stringDifference(baselineLinks, candidateLinks),
+    addedLinks: stringDifference(candidateLinks, baselineLinks),
+  };
+}
+
+function compareRebuildSources(baseline: WikiPage, candidate: WikiPage) {
+  const baselineSources = unique(baseline.metadata.sources).sort();
+  const candidateSources = unique(candidate.metadata.sources).sort();
+  return {
+    baselineSources,
+    candidateSources,
+    missingSources: stringDifference(baselineSources, candidateSources),
+  };
+}
+
+function rebuildClaims(page: WikiPage): (WikiRebuildClaim & { identity: string })[] {
+  return acceptedClaimRecords(page)
+    .map((claim) => ({ text: claim.text, source: claim.source, identity: claim.identity }))
+    .sort((left, right) => left.identity.localeCompare(right.identity));
+}
+
+function retainedClaimCount(
+  baseline: readonly { identity: string }[],
+  candidate: readonly { identity: string }[],
+): number {
+  const remaining = identityCounts(candidate);
+  return baseline.filter((claim) => consumeIdentity(remaining, claim.identity)).length;
+}
+
+function claimDifference(
+  left: readonly (WikiRebuildClaim & { identity: string })[],
+  right: readonly { identity: string }[],
+): WikiRebuildClaim[] {
+  const remaining = identityCounts(right);
+  return left
+    .filter((claim) => !consumeIdentity(remaining, claim.identity))
+    .map(({ text, source }) => ({ text, source }));
+}
+
+function identityCounts(claims: readonly { identity: string }[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const claim of claims) {
+    counts.set(claim.identity, (counts.get(claim.identity) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function consumeIdentity(counts: Map<string, number>, identity: string): boolean {
+  const count = counts.get(identity) ?? 0;
+  if (count === 0) return false;
+  counts.set(identity, count - 1);
+  return true;
+}
+
+function stringDifference(left: readonly string[], right: readonly string[]): string[] {
+  const values = new Set(right);
+  return unique(left.filter((value) => !values.has(value))).sort();
+}
+
+function issueDifference(
+  left: readonly WikiLintIssue[],
+  right: readonly WikiLintIssue[],
+): WikiLintIssue[] {
+  const identities = new Set(right.map(issueIdentity));
+  return left.filter((issue) => !identities.has(issueIdentity(issue)));
+}
+
+function issueIdentity(issue: WikiLintIssue): string {
+  return `${issue.path}\n${issue.code}\n${issue.message}`;
 }
 
 function taskPacket(
@@ -1667,6 +2095,7 @@ interface AcceptedClaimRecord {
   readonly path: string;
   readonly identity: string;
   readonly source: string;
+  readonly text: string;
 }
 
 function acceptedClaimRecords(page: WikiPage): AcceptedClaimRecord[] {
@@ -1675,7 +2104,7 @@ function acceptedClaimRecords(page: WikiPage): AcceptedClaimRecord[] {
     const source = acceptedClaimSource(lines[index + 1] ?? "")[0];
     return claim === undefined || source === undefined
       ? []
-      : [{ path: page.path, identity: `${source}\n${normalizeClaim(claim)}`, source }];
+      : [{ path: page.path, identity: `${source}\n${normalizeClaim(claim)}`, source, text: claim }];
   });
 }
 

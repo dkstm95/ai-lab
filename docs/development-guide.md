@@ -24,10 +24,13 @@ pnpm code:shape
 pnpm docs:check
 pnpm coverage
 pnpm build
+pnpm smoke:dist
 pnpm check
 ```
 
 `pnpm check` is the final local verification command. It runs formatting, lint and dependency boundaries, typecheck, code shape checks, coverage, build, and documentation consistency checks.
+The built-artifact smoke check also proves that the main CLI and standalone subscription runner
+select only their own process entrypoints.
 
 ## Configuration
 
