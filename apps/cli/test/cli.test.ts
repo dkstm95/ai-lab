@@ -182,9 +182,10 @@ describe("cli", () => {
       root,
     );
     const source = loggedJson<{ id: string; path: string }>(log);
+    const sourcePath = relative(join(root, "wiki"), source.path);
     await writeFile(
       join(root, "wiki", "pages", "concepts", "learning-loop.md"),
-      knowledgePage(relative(join(root, "wiki"), source.path)),
+      knowledgePage(sourcePath),
       "utf8",
     );
 
@@ -206,6 +207,29 @@ describe("cli", () => {
       "knowledge-context.json",
     );
     expect(context.knowledge.map(({ path }) => path)).toEqual(["pages/concepts/learning-loop.md"]);
+
+    const evaluationPath = join(root, "wiki", "evals", "knowledge-retrieval.json");
+    const evaluationCases = cliKnowledgeEvaluationCases(
+      "pages/concepts/learning-loop.md",
+      sourcePath,
+    );
+    await writeFile(evaluationPath, `${JSON.stringify(evaluationCases)}\n`, "utf8");
+    await runCli(["node", "ai-lab", "wiki", "knowledge", "evaluate"], root);
+    expect(loggedJson<{ passed: boolean; caseCount: number }>(log)).toMatchObject({
+      passed: true,
+      caseCount: 2,
+    });
+
+    await writeFile(
+      evaluationPath,
+      `${JSON.stringify(
+        cliKnowledgeEvaluationCases("pages/concepts/missing-learning-loop.md", sourcePath),
+      )}\n`,
+      "utf8",
+    );
+    await expect(runCli(["node", "ai-lab", "wiki", "knowledge", "evaluate"], root)).rejects.toThrow(
+      "1/2 cases passed",
+    );
 
     await runCli(
       [
@@ -1265,6 +1289,28 @@ sources:
 - accepted: Learning loops create durable value.
   source: ${source}
 `;
+}
+
+function cliKnowledgeEvaluationCases(expectedPage: string, expectedSource: string) {
+  return {
+    schemaVersion: "ai-lab.wiki-knowledge-evaluation-cases.v1",
+    cases: [
+      {
+        id: "learning-loop",
+        query: "학습 루프가 만드는 가치",
+        expectedPages: [expectedPage],
+        allowedPages: [expectedPage],
+        expectedSources: [expectedSource],
+      },
+      {
+        id: "unrelated-weather",
+        query: "서울 날씨",
+        expectedPages: [],
+        allowedPages: [],
+        expectedSources: [],
+      },
+    ],
+  };
 }
 
 function questionPath(root: string): string {

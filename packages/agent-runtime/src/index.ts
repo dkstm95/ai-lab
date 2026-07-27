@@ -44,6 +44,7 @@ export type {
   WikiMemoryEvaluationRecord,
   WikiMemoryEvaluationSummary,
   WikiKnowledgeContext,
+  WikiKnowledgeEvaluationReport,
 } from "@ai-lab/wiki";
 
 export interface AgentRuntime {

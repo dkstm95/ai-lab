@@ -29,7 +29,7 @@ docs/
 - `packages/model-providers`: provider adapters and routing. It supports API, external runner, manual, and fake provider kinds. It implements deterministic fake providers, the strict process boundary for trusted external-runner wrappers, and exact-version Codex and Claude subscription CLI profiles.
 - `packages/agent-runtime`: agent execution flow and trusted application workflows. It calls model providers and local tools, returns normalized run results, and composes the provider-neutral Wiki answer flow for human-facing adapters. It does not know CLI, HTTP, MCP, or provider transport details.
 - `packages/workspace`: local workspace behavior such as root selection, slug creation, and path-oriented helpers.
-- `packages/wiki`: local markdown LLM Wiki behavior such as wiki layout, source registration, deterministic knowledge and approved-memory retrieval, portable task/result schemas, digest-bound answer and reflection proposals, no-memory control tasks and paired evaluation records, non-mutating shadow rebuild reports, approval and stale-hash gates, transactional promotion, audit logs, metadata, and deterministic linting. Trusted integrations own explicit source overrides and reviewer authentication. The package has no provider, process, network, agent-loop, or CLI knowledge.
+- `packages/wiki`: local markdown LLM Wiki behavior such as wiki layout, source registration, deterministic knowledge retrieval and its checked-in evaluation cases, approved-memory retrieval, portable task/result schemas, digest-bound answer and reflection proposals, no-memory control tasks and paired evaluation records, non-mutating shadow rebuild reports, approval and stale-hash gates, transactional promotion, audit logs, metadata, and deterministic linting. Trusted integrations own explicit source overrides and reviewer authentication. The package has no provider, process, network, agent-loop, or CLI knowledge.
 - `packages/subbrain`: portable personal context memory prototype. It owns raw manual entries, event-level memories, the store interface, deterministic retrieval scoring, context packets, replaceable extraction/linking/query/answer ports, fixtures, and evaluation helpers. Its SQLite implementation is exposed from a separate subpath. It must not depend on apps, wiki, model providers, or agent runtime.
 - `packages/local-tools`: tools callable by the agent runtime, such as echo and Wiki packet/proposal tools. Its default agent-safe Wiki set cannot import sources, export source-bearing tasks, or apply proposals.
 - `apps/cli`: human terminal entrypoint. It owns private exchange artifacts, outbound task and runner disclosure, exact runner consent, exact proposal review rendering, and explicit digest acceptance.
@@ -104,7 +104,7 @@ still cannot prove per-request quota or billing. The contracts are in `docs/exte
   added complexity.
 - Extend `packages/subbrain` with embedding search, graph traversal, and relationship context after the deterministic baseline passes.
 - Add `packages/mcp` when agent runtime, local tools, or workspace capabilities need to be exposed to external agents.
-- Add `packages/evals` or `evals/` when the same validation logic repeats across multiple wiki or agent runs.
+- Move shared evaluation logic into `packages/evals` only when it repeats outside the Wiki.
 
 ## References
 

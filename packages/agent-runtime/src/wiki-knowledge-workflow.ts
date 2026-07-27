@@ -1,5 +1,7 @@
 import {
   type WikiKnowledgeContext,
+  type WikiKnowledgeEvaluationReport,
+  evaluateCurrentWikiKnowledge,
   prepareWikiKnowledgeContext,
   validateCurrentWikiKnowledgeContext,
 } from "@ai-lab/wiki";
@@ -14,5 +16,9 @@ export class WikiKnowledgeWorkflow {
 
   async validateContext(value: unknown, now: Date = new Date()): Promise<WikiKnowledgeContext> {
     return validateCurrentWikiKnowledgeContext(this.workspace, value, now);
+  }
+
+  async evaluate(now: Date = new Date()): Promise<WikiKnowledgeEvaluationReport> {
+    return evaluateCurrentWikiKnowledge(this.workspace, now);
   }
 }

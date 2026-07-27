@@ -24,7 +24,8 @@ An answer task can contain both. The current request and explicit instructions r
 Only `active` knowledge pages are eligible. A page is excluded when its `reviewAfter` timestamp has
 passed or is invalid. The query is normalized into letter and number terms. Common English question
 words and a narrow set of Korean particles and question endings are removed. When a query contains
-specific terms, one isolated match on `AI`, `LLM`, or `Wiki` does not select a page.
+more than one retained term, a page must match at least two. When a query contains specific terms,
+one isolated match on `AI`, `LLM`, or `Wiki` does not select a page.
 
 Each matching query term receives its strongest field weight:
 
@@ -45,6 +46,21 @@ pnpm cli wiki knowledge retrieve "AI 시대의 경쟁 우위" --out knowledge-co
 The output contains exact page bytes, SHA-256 hashes, scores, matched terms, and source paths. The
 context digest binds the full selection. Validation rejects it after any selected page or ranking
 input changes.
+
+## Retrieval Evaluation
+
+The reviewed fixture at `wiki/evals/knowledge-retrieval.json` contains real questions, required
+pages and sources, allowed pages, and unrelated questions that should return no result.
+
+```bash
+pnpm wiki:knowledge:eval
+```
+
+The command calls no model or API. It fails when a required page or source is missing, a selected
+page is outside the case allowlist, or an unrelated question retrieves a page. The report includes
+case pass rate, required-page recall, allowed-page precision, required-source recall, and
+abstention accuracy. Add or revise cases when the Wiki gains a durable topic or an observed search
+failure. Do not loosen a case merely to preserve the current ranking.
 
 ## Answer-Task Integration
 

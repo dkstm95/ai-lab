@@ -6,7 +6,7 @@
   "packageManager": "pnpm@9.15.0",
   "scripts": {
     "build": "pnpm -r --sort build",
-    "check": "pnpm format && pnpm lint && pnpm typecheck && pnpm code:shape && pnpm coverage && pnpm build && pnpm smoke:dist && pnpm docs:check",
+    "check": "pnpm format && pnpm lint && pnpm typecheck && pnpm code:shape && pnpm coverage && pnpm build && pnpm smoke:dist && pnpm wiki:knowledge:eval && pnpm docs:check",
     "cli": "node apps/cli/dist/index.js",
     "code:shape": "node tools/check-code-shape.mjs",
     "docs:check": "node tools/check-docs.mjs",
@@ -17,7 +17,8 @@
     "smoke:dist": "node tools/check-built-cli.mjs",
     "test": "vitest run",
     "coverage": "vitest run --coverage",
-    "typecheck": "tsc -b"
+    "typecheck": "tsc -b",
+    "wiki:knowledge:eval": "node apps/cli/dist/index.js wiki knowledge evaluate"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",

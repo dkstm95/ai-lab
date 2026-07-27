@@ -7,6 +7,7 @@ The LLM agent prepares source-backed knowledge and evidence-bound reflections. A
 ## Layers
 - raw sources are immutable evidence under `raw/sources/`.
 - raw memory evaluations are local observations under `raw/evals/`.
+- reviewed knowledge retrieval cases are stored under `evals/`.
 - wiki pages are compiled markdown knowledge under `pages/`.
 - `index.md` is the content map and must be updated with page changes.
 - `log.md` is chronological, append-only, and written only by the wiki package.
@@ -36,6 +37,10 @@ Read schema.md, index.md, then one raw source. Preserve source coverage before c
 ## Query
 
 Retrieve at most five relevant active source, concept, entity, synthesis, or question pages whose review date has not expired. Use them as navigation and synthesis context, then bind their raw sources as citable evidence. A compiled page does not itself prove a factual claim. Explicit source IDs add evidence but are not required when retrieved pages provide it. Prepare reusable answers as proposals with explicit claim/source pairs. Do not promote them before approval.
+
+## Knowledge Evaluation
+
+Run the reviewed cases in `evals/knowledge-retrieval.json` without a model. Require expected pages and raw sources, reject pages outside each case's allowlist, and verify unrelated questions return no page.
 
 ## Evolve
 

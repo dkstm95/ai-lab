@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { lstat, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { extname, isAbsolute, join, posix, relative } from "node:path";
+import { TextDecoder } from "node:util";
 import { type Workspace, slugify } from "@ai-lab/workspace";
 import {
   type WikiAnswerProposalDraft,
@@ -14,6 +15,11 @@ import {
   parseWikiAnswerResultForTask,
   parseWikiAnswerTask,
 } from "./answer-exchange.js";
+import {
+  type WikiKnowledgeEvaluationReport,
+  evaluateWikiKnowledgePages,
+  parseWikiKnowledgeEvaluationCaseSet,
+} from "./knowledge-evaluation.js";
 import {
   type WikiKnowledgeContext,
   type WikiKnowledgeMatch,
@@ -162,6 +168,18 @@ export type {
   WikiKnowledgePageCandidate,
   WikiKnowledgeReference,
 } from "./knowledge.js";
+export {
+  parseWikiKnowledgeEvaluationCaseSet,
+  wikiKnowledgeEvaluationCaseSetSchemaVersion,
+  wikiKnowledgeEvaluationReportSchemaVersion,
+} from "./knowledge-evaluation.js";
+export type {
+  WikiKnowledgeEvaluationCase,
+  WikiKnowledgeEvaluationCaseResult,
+  WikiKnowledgeEvaluationCaseSet,
+  WikiKnowledgeEvaluationMetrics,
+  WikiKnowledgeEvaluationReport,
+} from "./knowledge-evaluation.js";
 export {
   parseWikiRebuildReport,
   parseWikiRebuildResult,
@@ -438,6 +456,8 @@ const pageDirs = [
   "decisions",
   "evals",
 ];
+export const wikiKnowledgeEvaluationFixturePath = "evals/knowledge-retrieval.json";
+const maxKnowledgeEvaluationBytes = 1_000_000;
 
 export async function initWiki(workspace: Workspace): Promise<WikiSnapshot> {
   return withWikiWriteLock(workspace, initWikiUnlocked);
@@ -542,6 +562,16 @@ export async function validateCurrentWikiKnowledgeContext(
     }
     return context;
   });
+}
+
+export async function evaluateCurrentWikiKnowledge(
+  workspace: Workspace,
+  now: Date = new Date(),
+): Promise<WikiKnowledgeEvaluationReport> {
+  const snapshot = new Date(now.getTime());
+  return withWikiWriteLock(workspace, (locked) =>
+    evaluateCurrentWikiKnowledgeLocked(locked, snapshot),
+  );
 }
 
 export async function prepareWikiMemoryContext(
@@ -1964,6 +1994,53 @@ async function wikiKnowledgeMatches(
   );
 }
 
+async function evaluateCurrentWikiKnowledgeLocked(
+  workspace: Workspace,
+  now: Date,
+): Promise<WikiKnowledgeEvaluationReport> {
+  await assertInitializedWiki(workspace);
+  const [caseSet, pages] = await Promise.all([
+    readKnowledgeEvaluationCaseSet(workspace),
+    listWikiPages(workspace),
+  ]);
+  const report = evaluateWikiKnowledgePages(
+    pages.map((page) => knowledgePageCandidate(workspace, page)),
+    caseSet,
+    now,
+  );
+  await assertEvaluationSourcesExist(workspace, report);
+  return report;
+}
+
+async function assertEvaluationSourcesExist(
+  workspace: Workspace,
+  report: WikiKnowledgeEvaluationReport,
+): Promise<void> {
+  const paths = unique(report.cases.flatMap(({ selectedSources }) => selectedSources));
+  await Promise.all(paths.map((path) => resolveWikiSource(workspace, path)));
+}
+
+async function readKnowledgeEvaluationCaseSet(workspace: Workspace): Promise<unknown> {
+  await assertWikiPath(workspace, {
+    path: wikiKnowledgeEvaluationFixturePath,
+    type: "file",
+    allowMissing: false,
+  });
+  const bytes = await readFile(wikiPath(workspace, wikiKnowledgeEvaluationFixturePath));
+  if (bytes.byteLength > maxKnowledgeEvaluationBytes) {
+    throw new Error(
+      `Wiki knowledge evaluation fixture exceeds ${maxKnowledgeEvaluationBytes} bytes`,
+    );
+  }
+  try {
+    return parseWikiKnowledgeEvaluationCaseSet(
+      JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)),
+    );
+  } catch {
+    throw new Error("Wiki knowledge evaluation fixture is invalid");
+  }
+}
+
 function knowledgePageCandidate(workspace: Workspace, page: WikiPage): WikiKnowledgePageCandidate {
   const candidate = {
     path: relativeWikiPath(workspace, page.path),
@@ -2345,6 +2422,7 @@ function relativeWikiPath(workspace: Workspace, path: string): string {
 
 function wikiDirectories(workspace: Workspace): string[] {
   return [
+    wikiPath(workspace, "evals"),
     wikiPath(workspace, "raw", "sources"),
     wikiPath(workspace, "raw", "runs"),
     wikiPath(workspace, "raw", "evals"),
@@ -3427,6 +3505,7 @@ function schemaLayerRules(): string {
     "## Layers",
     "- raw sources are immutable evidence under `raw/sources/`.",
     "- raw memory evaluations are local observations under `raw/evals/`.",
+    "- reviewed knowledge retrieval cases are stored under `evals/`.",
     "- wiki pages are compiled markdown knowledge under `pages/`.",
     "- `index.md` is the content map and must be updated with page changes.",
     "- `log.md` is chronological, append-only, and written only by the wiki package.",
@@ -3456,6 +3535,8 @@ function schemaWorkflowRules(): string {
     "Read schema.md, index.md, then one raw source. Preserve source coverage before compression by keeping distinct operating models, practices, risks, and tradeoffs as separate source-backed claims. Create or update source, concept, entity, and synthesis pages when the source contains reusable knowledge beyond a one-off summary. Check existing claim/source pairs before writing to avoid semantic duplicates. Mark contradictions as conflicted instead of overwriting silently. Route ambiguous contradictions, stale updates, and user-owned interpretations to review instead of silently overwriting. Prepare candidate page and index changes only. Ingest approval and promotion are not implemented yet.",
     "## Query",
     "Retrieve at most five relevant active source, concept, entity, synthesis, or question pages whose review date has not expired. Use them as navigation and synthesis context, then bind their raw sources as citable evidence. A compiled page does not itself prove a factual claim. Explicit source IDs add evidence but are not required when retrieved pages provide it. Prepare reusable answers as proposals with explicit claim/source pairs. Do not promote them before approval.",
+    "## Knowledge Evaluation",
+    "Run the reviewed cases in `evals/knowledge-retrieval.json` without a model. Require expected pages and raw sources, reject pages outside each case's allowlist, and verify unrelated questions return no page.",
     "## Evolve",
     "Manual or automated agents read lint issues, recent runs, and candidate pages, then prepare small source-backed candidate updates. Evolve approval and promotion are not implemented yet.",
     "## Reflect",

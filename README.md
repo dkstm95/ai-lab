@@ -56,6 +56,7 @@ portable answer workflow does not call a model API or depend on one AI vendor:
 pnpm cli wiki init
 pnpm cli wiki source add notes.md --title "Research notes"
 pnpm cli wiki knowledge retrieve "What creates durable advantage?"
+pnpm cli wiki knowledge evaluate
 pnpm cli wiki answer task "What creates durable advantage?" --out task.json
 
 # Give the prompt in .ai-lab/wiki-exchange/task.json to any AI.
