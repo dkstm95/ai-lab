@@ -616,7 +616,7 @@ describe("wiki", () => {
     expect(report.candidateDiagnostics.issues).toEqual([]);
   });
 
-  it("reports non-claim sections removed by canonical rebuild output", async () => {
+  it("preserves and compares structured hypotheses without exposing the baseline body", async () => {
     const workspace = await tempWorkspace();
     await prepareRebuildWiki(workspace.root);
     const sourcePath = rebuildSourcePagePath(workspace.root);
@@ -628,16 +628,56 @@ describe("wiki", () => {
     );
     const task = await prepareWikiRebuildTask(workspace, rebuildTaskInput(), now());
 
-    const report = await prepareWikiRebuildReport(workspace, task, rebuildResult(task));
+    const result = {
+      ...rebuildResult(task),
+      pages: rebuildResult(task).pages.map((page) =>
+        page.path === "pages/sources/llm-wiki-source.md"
+          ? { ...page, hypotheses: ["Test before promotion."] }
+          : page,
+      ),
+    };
+    const report = await prepareWikiRebuildReport(workspace, task, result);
     const comparison = report.comparisons.find(
       (candidate) => candidate.path === "pages/sources/llm-wiki-source.md",
     );
 
     expect(comparison).toMatchObject({
       baselineSections: ["Application Notes", "Key Claims", "Links", "Summary"],
-      candidateSections: ["Key Claims", "Links", "Summary"],
-      missingSections: ["Application Notes"],
+      candidateSections: ["Application Notes", "Key Claims", "Links", "Summary"],
+      missingSections: [],
       addedSections: [],
+      baselineHypothesisCount: 1,
+      candidateHypothesisCount: 1,
+      retainedHypothesisCount: 1,
+      missingHypotheses: [],
+      addedHypotheses: [],
+    });
+    expect(task.prompt).not.toContain("Test before promotion.");
+  });
+
+  it("reports hypothesis loss even when the section shape remains otherwise valid", async () => {
+    const workspace = await tempWorkspace();
+    await prepareRebuildWiki(workspace.root);
+    const sourcePath = rebuildSourcePagePath(workspace.root);
+    const source = await readFile(sourcePath, "utf8");
+    await writeFile(
+      sourcePath,
+      `${source}\n## Application Notes\n\n- hypothesis: Test before promotion.\n`,
+      "utf8",
+    );
+    const task = await prepareWikiRebuildTask(workspace, rebuildTaskInput(), now());
+    const report = await prepareWikiRebuildReport(workspace, task, rebuildResult(task));
+    const comparison = report.comparisons.find(
+      (candidate) => candidate.path === "pages/sources/llm-wiki-source.md",
+    );
+
+    expect(comparison).toMatchObject({
+      baselineHypothesisCount: 1,
+      candidateHypothesisCount: 0,
+      retainedHypothesisCount: 0,
+      missingHypotheses: ["Test before promotion."],
+      addedHypotheses: [],
+      missingSections: ["Application Notes"],
     });
   });
 
@@ -913,6 +953,15 @@ describe("wiki", () => {
           ...result,
           pages: result.pages.map((page, index) =>
             index === 0 ? { ...page, acceptedClaims: [firstClaim, firstClaim] } : page,
+          ),
+        }),
+      () =>
+        parseWikiRebuildResultForTask(task, {
+          ...result,
+          pages: result.pages.map((page, index) =>
+            index === 0
+              ? { ...page, hypotheses: ["Repeated hypothesis.", "repeated  hypothesis."] }
+              : page,
           ),
         }),
       () =>
@@ -1674,7 +1723,7 @@ function rebuildTaskInput() {
 
 function rebuildResult(task: WikiRebuildTask): WikiRebuildResult {
   return {
-    schemaVersion: "ai-lab.wiki-rebuild-result.v1",
+    schemaVersion: "ai-lab.wiki-rebuild-result.v2",
     taskId: task.id,
     taskDigest: task.digest,
     pages: task.targets.map((target) => ({
@@ -1686,6 +1735,7 @@ function rebuildResult(task: WikiRebuildTask): WikiRebuildResult {
           sourceId: "karpathy-llm-wiki",
         },
       ],
+      hypotheses: [],
       links: [target.kind === "concept" ? "llm-wiki-source" : "llm-wiki"],
     })),
   };

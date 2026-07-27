@@ -851,8 +851,10 @@ function rebuildInstructions(): string[] {
   return [
     "Use only the selected managed sources for accepted claims.",
     "Preserve distinct operating models, practices, risks, and tradeoffs before compression.",
-    "Write one concise summary, explicit accepted claims, and useful Wiki links per target.",
-    "Keep summary and claim text to one line each; put Wiki links only in the links field.",
+    "Separate source-backed facts into acceptedClaims and source-derived interpretations that still require project judgment into hypotheses.",
+    "Do not turn a hypothesis into an accepted claim; return an empty hypotheses list when none are warranted.",
+    "Write one concise summary, explicit typed claims, and useful Wiki links per target.",
+    "Keep summary, claim, and hypothesis text to one line each; put Wiki links only in the links field.",
     "Return every target exactly once in canonical path order.",
     ...writingConstraints(),
     "Keep one main idea per sentence and split sentences that are hard to understand in one pass.",
@@ -981,7 +983,10 @@ function rebuildCandidateFile(
   const metadata = rebuildMetadata(task, target, claims);
   return {
     path: target.path,
-    content: renderWikiPage(metadata, rebuildBody(page.summary, claims, page.links)),
+    content: renderWikiPage(
+      metadata,
+      rebuildBody(page.summary, claims, page.hypotheses, page.links),
+    ),
   };
 }
 
@@ -1016,10 +1021,17 @@ function rebuildMetadata(
 function rebuildBody(
   summary: string,
   claims: readonly WikiAcceptedClaim[],
+  hypotheses: readonly string[],
   links: readonly string[],
 ): string {
+  const notes =
+    hypotheses.length === 0
+      ? ""
+      : `\n\n## Application Notes\n\n${hypotheses
+          .map((hypothesis) => `- hypothesis: ${hypothesis}`)
+          .join("\n")}`;
   const renderedLinks = links.map((link) => `- [[${link}]]`).join("\n");
-  return `## Summary\n\n${summary.trim()}\n\n## Key Claims\n\n${answerClaims(claims)}\n\n## Links\n\n${renderedLinks}\n`;
+  return `## Summary\n\n${summary.trim()}\n\n## Key Claims\n\n${answerClaims(claims)}${notes}\n\n## Links\n\n${renderedLinks}\n`;
 }
 
 async function rebuildLintReports(
@@ -1084,6 +1096,7 @@ function compareRebuildPages(
     baselineSha256: sha256(baseline.content),
     candidateSha256: sha256(candidate.content),
     ...compareRebuildClaims(baseline, candidate),
+    ...compareRebuildHypotheses(baseline, candidate),
     ...compareRebuildSections(baseline, candidate),
     ...compareRebuildLinks(baseline, candidate),
     ...compareRebuildSources(baseline, candidate),
@@ -1099,6 +1112,19 @@ function compareRebuildClaims(baseline: WikiPage, candidate: WikiPage) {
     retainedClaimCount: retainedClaimCount(baselineClaims, candidateClaims),
     missingClaims: claimDifference(baselineClaims, candidateClaims),
     addedClaims: claimDifference(candidateClaims, baselineClaims),
+  };
+}
+
+function compareRebuildHypotheses(baseline: WikiPage, candidate: WikiPage) {
+  const baselineHypotheses = rebuildHypotheses(baseline);
+  const candidateHypotheses = rebuildHypotheses(candidate);
+  const retained = retainedClaimCount(baselineHypotheses, candidateHypotheses);
+  return {
+    baselineHypothesisCount: baselineHypotheses.length,
+    candidateHypothesisCount: candidateHypotheses.length,
+    retainedHypothesisCount: retained,
+    missingHypotheses: textDifference(baselineHypotheses, candidateHypotheses),
+    addedHypotheses: textDifference(candidateHypotheses, baselineHypotheses),
   };
 }
 
@@ -1148,6 +1174,16 @@ function rebuildClaims(page: WikiPage): (WikiRebuildClaim & { identity: string }
     .sort((left, right) => left.identity.localeCompare(right.identity));
 }
 
+function rebuildHypotheses(page: WikiPage): { text: string; identity: string }[] {
+  return page.content
+    .split("\n")
+    .flatMap((line) => {
+      const text = /^\s*-\s+hypothesis:\s*(.+)$/.exec(line)?.[1];
+      return text === undefined ? [] : [{ text, identity: normalizeClaim(text) }];
+    })
+    .sort((left, right) => left.identity.localeCompare(right.identity));
+}
+
 function retainedClaimCount(
   baseline: readonly { identity: string }[],
   candidate: readonly { identity: string }[],
@@ -1164,6 +1200,17 @@ function claimDifference(
   return left
     .filter((claim) => !consumeIdentity(remaining, claim.identity))
     .map(({ text, source }) => ({ text, source }));
+}
+
+function textDifference(
+  left: readonly { text: string; identity: string }[],
+  right: readonly { identity: string }[],
+): string[] {
+  const remaining = identityCounts(right);
+  return left
+    .filter((item) => !consumeIdentity(remaining, item.identity))
+    .map(({ text }) => text)
+    .sort();
 }
 
 function identityCounts(claims: readonly { identity: string }[]): Map<string, number> {
@@ -2402,6 +2449,7 @@ function schemaPageRules(): string {
     "## Page Rules",
     "- Use YAML frontmatter with title, slug, kind, status, createdAt, updatedAt, and sources.",
     "- Use typed claims: accepted, hypothesis, or conflicted.",
+    "- Keep source-backed facts in accepted claims and interpretations that still require project judgment in hypothesis claims.",
     "- Every accepted claim must include a following source line.",
     "- A source path proves provenance, not truth. Accepted status requires review of the exact claim/source pair.",
     "- Keep each accepted claim distinct; do not duplicate the same claim/source pair across pages.",

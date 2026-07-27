@@ -13,6 +13,7 @@ The LLM agent proposes source-backed changes. For answer proposals, a trusted ca
 ## Page Rules
 - Use YAML frontmatter with title, slug, kind, status, createdAt, updatedAt, and sources.
 - Use typed claims: accepted, hypothesis, or conflicted.
+- Keep source-backed facts in accepted claims and interpretations that still require project judgment in hypothesis claims.
 - Every accepted claim must include a following source line.
 - A source path proves provenance, not truth. Accepted status requires review of the exact claim/source pair.
 - Keep each accepted claim distinct; do not duplicate the same claim/source pair across pages.

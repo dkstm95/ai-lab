@@ -799,7 +799,7 @@ async function writeRebuildResult(
   sourceId: string,
 ): Promise<void> {
   const result: WikiRebuildResult = {
-    schemaVersion: "ai-lab.wiki-rebuild-result.v1",
+    schemaVersion: "ai-lab.wiki-rebuild-result.v2",
     taskId: task.id,
     taskDigest: task.digest,
     pages: task.targets.map((target) => rebuildResultPage(target, sourceId)),
@@ -819,6 +819,7 @@ function rebuildResultPage(target: WikiRebuildTask["targets"][number], sourceId:
     acceptedClaims: [
       { text: concept ? "Rebuilt concept claim." : "Rebuilt source claim.", sourceId },
     ],
+    hypotheses: [],
     links: [concept ? "research-source" : "research-concept"],
   };
 }

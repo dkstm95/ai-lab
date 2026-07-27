@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 
-export const wikiRebuildTaskSchemaVersion = "ai-lab.wiki-rebuild-task.v1";
-export const wikiRebuildResultSchemaVersion = "ai-lab.wiki-rebuild-result.v1";
-export const wikiRebuildReportSchemaVersion = "ai-lab.wiki-rebuild-report.v2";
+export const wikiRebuildTaskSchemaVersion = "ai-lab.wiki-rebuild-task.v2";
+export const wikiRebuildResultSchemaVersion = "ai-lab.wiki-rebuild-result.v2";
+export const wikiRebuildReportSchemaVersion = "ai-lab.wiki-rebuild-report.v3";
 
 export const wikiRebuildResultJsonSchema = {
   type: "object",
@@ -47,13 +47,25 @@ export const wikiRebuildResultJsonSchema = {
               required: ["text", "sourceId"],
             },
           },
+          hypotheses: {
+            type: "array",
+            maxItems: 100,
+            description:
+              "Source-derived interpretations that still require project judgment. Use an empty array when none are warranted.",
+            items: {
+              type: "string",
+              minLength: 1,
+              maxLength: 10_000,
+              pattern: "^[^\\r\\n]+$",
+            },
+          },
           links: {
             type: "array",
             maxItems: 100,
             items: { type: "string", minLength: 1, maxLength: 500 },
           },
         },
-        required: ["path", "summary", "acceptedClaims", "links"],
+        required: ["path", "summary", "acceptedClaims", "hypotheses", "links"],
       },
     },
   },
@@ -104,6 +116,7 @@ export interface WikiRebuildResultPage {
   readonly path: string;
   readonly summary: string;
   readonly acceptedClaims: readonly WikiRebuildResultClaim[];
+  readonly hypotheses: readonly string[];
   readonly links: readonly string[];
 }
 
@@ -129,6 +142,11 @@ export interface WikiRebuildComparison {
   readonly retainedClaimCount: number;
   readonly missingClaims: readonly WikiRebuildClaim[];
   readonly addedClaims: readonly WikiRebuildClaim[];
+  readonly baselineHypothesisCount: number;
+  readonly candidateHypothesisCount: number;
+  readonly retainedHypothesisCount: number;
+  readonly missingHypotheses: readonly string[];
+  readonly addedHypotheses: readonly string[];
   readonly baselineSections: readonly string[];
   readonly candidateSections: readonly string[];
   readonly missingSections: readonly string[];
@@ -217,6 +235,11 @@ const comparisonKeys = [
   "retainedClaimCount",
   "missingClaims",
   "addedClaims",
+  "baselineHypothesisCount",
+  "candidateHypothesisCount",
+  "retainedHypothesisCount",
+  "missingHypotheses",
+  "addedHypotheses",
   "baselineSections",
   "candidateSections",
   "missingSections",
@@ -315,6 +338,7 @@ function resultTemplate(task: Omit<WikiRebuildTask, "prompt">): WikiRebuildResul
       path: target.path,
       summary: "source-backed summary",
       acceptedClaims: [{ text: "one factual claim", sourceId: task.evidence[0]?.id ?? "" }],
+      hypotheses: [],
       links: [],
     })),
   };
@@ -463,7 +487,11 @@ function assertWikiRebuildResult(result: WikiRebuildResult): void {
 }
 
 function assertResultPage(page: WikiRebuildResultPage): void {
-  assertExactKeys(page, ["path", "summary", "acceptedClaims", "links"], "Wiki rebuild page");
+  assertExactKeys(
+    page,
+    ["path", "summary", "acceptedClaims", "hypotheses", "links"],
+    "Wiki rebuild page",
+  );
   if (
     !oneLine(page.path) ||
     !plainResultText(page.summary) ||
@@ -472,7 +500,21 @@ function assertResultPage(page: WikiRebuildResultPage): void {
     throw new Error("Wiki rebuild result page is invalid");
   }
   assertClaims(page.acceptedClaims);
+  assertHypotheses(page.hypotheses);
   assertStringList(page.links, 100, "Wiki rebuild result links", true);
+}
+
+function assertHypotheses(hypotheses: readonly string[]): void {
+  if (
+    !validStringList(hypotheses, 100, true) ||
+    hypotheses.some((hypothesis) => !plainResultText(hypothesis) || hypothesis.length > 10_000)
+  ) {
+    throw new Error("Wiki rebuild result hypotheses are invalid");
+  }
+  const identities = hypotheses.map(normalize);
+  if (new Set(identities).size !== identities.length) {
+    throw new Error("Wiki rebuild result contains duplicate hypotheses");
+  }
 }
 
 function assertClaims(claims: readonly WikiRebuildResultClaim[]): void {
@@ -581,6 +623,7 @@ function assertComparison(comparison: WikiRebuildComparison): void {
     throw new Error("Wiki rebuild comparison is invalid");
   }
   assertClaimComparison(comparison);
+  assertHypothesisComparison(comparison);
   assertSectionComparison(comparison);
   assertLinkComparison(comparison);
   assertSourceComparison(comparison);
@@ -600,6 +643,11 @@ function validComparisonScalars(comparison: WikiRebuildComparison): boolean {
 function assertClaimComparison(comparison: WikiRebuildComparison): void {
   assertClaimList(comparison.missingClaims);
   assertClaimList(comparison.addedClaims);
+}
+
+function assertHypothesisComparison(comparison: WikiRebuildComparison): void {
+  assertSortedTextList(comparison.missingHypotheses, 1_000, "Wiki rebuild missing hypotheses");
+  assertSortedTextList(comparison.addedHypotheses, 1_000, "Wiki rebuild added hypotheses");
 }
 
 function assertSectionComparison(comparison: WikiRebuildComparison): void {
@@ -670,6 +718,9 @@ function validComparisonCounts(comparison: WikiRebuildComparison): boolean {
     comparison.baselineClaimCount,
     comparison.candidateClaimCount,
     comparison.retainedClaimCount,
+    comparison.baselineHypothesisCount,
+    comparison.candidateHypothesisCount,
+    comparison.retainedHypothesisCount,
   ];
   return (
     counts.every((count) => Number.isSafeInteger(count) && count >= 0 && count <= 1_000) &&
@@ -677,7 +728,14 @@ function validComparisonCounts(comparison: WikiRebuildComparison): boolean {
       Math.min(comparison.baselineClaimCount, comparison.candidateClaimCount) &&
     comparison.baselineClaimCount - comparison.retainedClaimCount ===
       comparison.missingClaims.length &&
-    comparison.candidateClaimCount - comparison.retainedClaimCount === comparison.addedClaims.length
+    comparison.candidateClaimCount - comparison.retainedClaimCount ===
+      comparison.addedClaims.length &&
+    comparison.retainedHypothesisCount <=
+      Math.min(comparison.baselineHypothesisCount, comparison.candidateHypothesisCount) &&
+    comparison.baselineHypothesisCount - comparison.retainedHypothesisCount ===
+      comparison.missingHypotheses.length &&
+    comparison.candidateHypothesisCount - comparison.retainedHypothesisCount ===
+      comparison.addedHypotheses.length
   );
 }
 
@@ -758,6 +816,15 @@ function assertStringList(
   if (
     !validStringList(values, max, allowEmpty) ||
     new Set(values).size !== values.length ||
+    JSON.stringify(values) !== JSON.stringify([...values].sort(compareText))
+  ) {
+    throw new Error(`${label} is invalid`);
+  }
+}
+
+function assertSortedTextList(values: readonly string[], max: number, label: string): void {
+  if (
+    !validStringList(values, max, true) ||
     JSON.stringify(values) !== JSON.stringify([...values].sort(compareText))
   ) {
     throw new Error(`${label} is invalid`);
