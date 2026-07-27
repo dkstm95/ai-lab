@@ -8,6 +8,7 @@ import {
   prepareWikiEvolve,
   prepareWikiIngest,
   prepareWikiQuery,
+  prepareWikiReflectionReport,
   prepareWikiReflectionTask,
   recordWikiRun,
 } from "@ai-lab/wiki";
@@ -132,6 +133,25 @@ export class PrepareWikiReflectionTool implements LocalTool {
   }
 }
 
+export class ProposeWikiReflectionTool implements LocalTool {
+  readonly definition = {
+    name: "wiki.reflect.propose",
+    description:
+      "Validates a task-bound reflection result and prepares a linted report without applying it.",
+  };
+
+  constructor(private readonly workspace: Workspace) {}
+
+  async execute(call: ToolCall): Promise<ToolResult> {
+    const report = await prepareWikiReflectionReport(
+      this.workspace,
+      requiredStructuredInput(call, "task"),
+      requiredStructuredInput(call, "result"),
+    );
+    return { name: this.definition.name, output: report };
+  }
+}
+
 export class RecordWikiRunTool implements LocalTool {
   readonly definition = {
     name: "wiki.run.record",
@@ -191,6 +211,7 @@ export function createWikiTools(workspace: Workspace): LocalTool[] {
     new PrepareWikiEvolveTool(workspace),
     new RecordWikiRunTool(workspace),
     new ProposeWikiAnswerTool(workspace),
+    new ProposeWikiReflectionTool(workspace),
   ];
 }
 

@@ -11,6 +11,7 @@ import {
   type WikiProposal,
   type WikiRebuildReport,
   WikiRebuildWorkflow,
+  type WikiReflectionReport,
   WikiReflectionWorkflow,
   externalRunnerFileSha256,
 } from "@ai-lab/agent-runtime";
@@ -134,6 +135,12 @@ async function dispatchWikiMaintenanceCommand(
     return rebuildApplyCommand(root, args[2] ?? "", options);
   if (route === "reflect prepare" && args.length === 2)
     return reflectionPrepareCommand(root, options);
+  if (route === "reflect propose" && args.length === 2)
+    return reflectionProposeCommand(root, options);
+  if (route === "reflect review" && args.length === 3)
+    return reflectionReviewCommand(root, args[2] ?? "");
+  if (route === "reflect apply" && args.length === 3)
+    return reflectionApplyCommand(root, args[2] ?? "", options);
   throw new Error(`Unknown wiki command: wiki ${args.join(" ")}`);
 }
 
@@ -444,6 +451,50 @@ function reflectionTaskSummary(
   };
 }
 
+async function reflectionProposeCommand(
+  root: string | undefined,
+  options: ProposeOptions,
+): Promise<void> {
+  const [task, result] = await Promise.all([
+    readArtifact(workspaceRoot(root), requiredText(options.task, "--task")),
+    readArtifact(workspaceRoot(root), requiredText(options.result, "--result")),
+  ]);
+  const report = await reflectionWorkflow(root).prepareReport(task, result);
+  const artifact = await writeArtifact(
+    workspaceRoot(root),
+    requiredText(options.out, "--out"),
+    report,
+  );
+  console.log(JSON.stringify({ artifact, id: report.id, digest: report.digest }, null, 2));
+}
+
+async function reflectionReviewCommand(root: string | undefined, name: string): Promise<void> {
+  const report = reflectionWorkflow(root).reviewReport(
+    await readArtifact(workspaceRoot(root), name),
+  );
+  console.log(formatWikiReflectionReview(report));
+}
+
+async function reflectionApplyCommand(
+  root: string | undefined,
+  name: string,
+  options: RebuildApplyOptions,
+): Promise<void> {
+  const [task, result, report] = await Promise.all([
+    readArtifact(workspaceRoot(root), requiredText(options.task, "--task")),
+    readArtifact(workspaceRoot(root), requiredText(options.result, "--result")),
+    readArtifact(workspaceRoot(root), name),
+  ]);
+  const applied = await reflectionWorkflow(root).applyReviewed({
+    task,
+    result,
+    report,
+    acceptedDigest: requiredText(options.acceptDigest, "--accept-digest"),
+    reviewedBy: requiredText(options.reviewer, "--reviewer"),
+  });
+  console.log(JSON.stringify(applied, null, 2));
+}
+
 function workflow(root?: string): WikiAnswerWorkflow {
   return new WikiAnswerWorkflow(
     root === undefined ? createDefaultWorkspace() : createWorkspace(root),
@@ -717,6 +768,15 @@ export function formatWikiProposalReview(proposal: WikiProposal): string {
 export function formatWikiRebuildReview(report: WikiRebuildReport): string {
   return [
     "Review this exact shadow rebuild report before applying its bound task and result.",
+    "Terminal control and direction characters are escaped.",
+    safeJson(report),
+    `Digest: ${report.digest}`,
+  ].join("\n");
+}
+
+export function formatWikiReflectionReview(report: WikiReflectionReport): string {
+  return [
+    "Review this exact reflection report before applying its bound task and result.",
     "Terminal control and direction characters are escaped.",
     safeJson(report),
     `Digest: ${report.digest}`,

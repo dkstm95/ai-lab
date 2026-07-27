@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import { posix } from "node:path";
+import {
+  wikiReflectionResultSchemaVersion,
+  wikiReflectionResultTemplate,
+} from "./reflection-result.js";
 
-export const wikiReflectionTaskSchemaVersion = "ai-lab.wiki-reflection-task.v1";
+export const wikiReflectionTaskSchemaVersion = "ai-lab.wiki-reflection-task.v2";
 
 export interface WikiReflectionTaskContext {
   readonly path: string;
@@ -258,9 +262,12 @@ function renderWikiReflectionPrompt(task: Omit<WikiReflectionTask, "prompt">): s
     "First decide whether the lesson is durable enough to save. If not, explain why and do not create a page.",
     "Choose failure for a repeatable mistake, playbook for a reusable procedure, or decision for an accepted project choice.",
     "Separate observed facts from inferred causes. Do not turn a single event into a universal claim.",
-    "Prepare candidate files only. Proposal validation, approval, and promotion are not implemented yet.",
+    "Return skip when the lesson is not durable enough to save.",
     ...task.constraints,
     `Expected candidate paths: ${task.expectedFiles.join(", ")}`,
+    "Return exactly one JSON object. Do not use Markdown fences or add commentary.",
+    `Required result schema version: ${wikiReflectionResultSchemaVersion}`,
+    `Result template: ${JSON.stringify(wikiReflectionResultTemplate(task), null, 2)}`,
     `Task data: ${JSON.stringify(reflectionTaskData(task), null, 2)}`,
   ].join("\n\n");
 }

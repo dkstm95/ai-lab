@@ -78,23 +78,11 @@ run task
   -> retrieve relevant memory on the next task
 ```
 
-## Reflection Preparation
+## Reflection Workflow
 
-`wiki.reflect.prepare` is the implemented first unit of the reflection flow. It prepares a
-provider-neutral task artifact and does not invoke a model or modify the live Wiki.
-
-Inputs:
-
-- exactly one recent run id or run summary
-- user feedback
-- validation result
-- changed files
-
-Output:
-
-- a digest-bound task packet containing the selected evidence and current `schema.md` and `index.md`
-- expected files under `pages/failures`, `pages/playbooks`, or `pages/decisions`
-- constraints for redaction, evidence-grounded observations, and no direct `AGENTS.md` edits
+The reflection flow uses provider-neutral JSON artifacts. It does not require a model API. The
+input contains exactly one recent run id or run summary, user feedback, validation, and changed
+files. `prepare` binds those values with the current `schema.md` and `index.md`.
 
 The recorded-run form snapshots the selected `wiki/raw/runs/*.json` file and binds its hash. The
 summary form does not fabricate a raw run. Both forms preserve feedback, validation, and changed
@@ -115,11 +103,26 @@ Create a private input artifact under `.ai-lab/wiki-exchange`, then prepare the 
 pnpm cli wiki reflect prepare \
   --input reflection-input.json \
   --out reflection-task.json
+
+# Produce reflection-result.json with Codex or another platform, then:
+pnpm cli wiki reflect propose \
+  --task reflection-task.json \
+  --result reflection-result.json \
+  --out reflection-report.json
+pnpm cli wiki reflect review reflection-report.json
+pnpm cli wiki reflect apply reflection-report.json \
+  --task reflection-task.json \
+  --result reflection-result.json \
+  --reviewer "reviewer name" \
+  --accept-digest "<full reviewed digest>"
 ```
 
 Use `runSummary` instead of `runId` when no raw run was retained. The exchange directory and
 artifacts are private local files. Inspect the task before giving it to Codex or another platform
 because a recorded-run task contains the selected raw run snapshot.
 
-Reflection result validation, candidate lint, approval, and promotion remain separate later units.
-Until they exist, the task explicitly forbids writing the live Wiki.
+The result is typed as `failure`, `playbook`, or `decision`; the host renders Markdown and
+frontmatter. `propose` previews full-Wiki lint without changing live files. `apply` accepts only the
+exact reviewed report digest, rechecks task context and candidate state, promotes the page and
+index atomically, and appends the audit log. A `skip` report records that no durable lesson exists
+and cannot be applied.

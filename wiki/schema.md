@@ -2,7 +2,7 @@
 
 ## Role
 
-The LLM agent proposes source-backed changes. For answer proposals, a trusted caller attests that a human reviewed the exact bytes; the package validates the attestation and current hashes but does not authenticate the reviewer.
+The LLM agent prepares source-backed knowledge and evidence-bound reflections. A trusted caller attests that a human reviewed the exact proposal or report bytes; the package validates the attestation and current hashes but does not authenticate the reviewer.
 
 ## Layers
 - raw sources are immutable evidence under `raw/sources/`.
@@ -17,6 +17,7 @@ The LLM agent proposes source-backed changes. For answer proposals, a trusted ca
 - Every accepted claim must include a following source line.
 - A source path proves provenance, not truth. Accepted status requires review of the exact claim/source pair.
 - Keep each accepted claim distinct; do not duplicate the same claim/source pair across pages.
+- Reflection pages keep `sources` empty because raw runs stay local; the task and report digests bind their evidence.
 - Avoid stale metaphors, similes, idioms, and stock phrases.
 - Prefer short, familiar words when they express the same meaning.
 - Remove every word that does not add meaning.
@@ -38,6 +39,10 @@ Read index.md first, then relevant pages. Answer with citations to wiki pages or
 
 Manual or automated agents read lint issues, recent runs, and candidate pages, then prepare small source-backed candidate updates. Evolve approval and promotion are not implemented yet.
 
+## Reflect
+
+Prepare a task from one explicit run or summary, feedback, validation, and changed files. Return a typed failure, playbook, decision, or skip result. The package renders and lints candidate Markdown. Promote it only after review of the exact report digest.
+
 ## Lint
 
-Check broken links, orphan pages, stale TODOs, unsupported sources, conflicted or review pages, duplicate slugs, duplicate accepted claims, stale active pages, and index drift.
+Check broken links, orphan concept/entity/synthesis pages, stale TODOs, unsupported sources, conflicted or review pages, duplicate slugs, duplicate accepted claims, stale active pages, and index drift.

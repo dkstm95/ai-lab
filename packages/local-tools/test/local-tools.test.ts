@@ -15,6 +15,7 @@ import {
   PrepareWikiQueryTool,
   PrepareWikiReflectionTool,
   ProposeWikiAnswerTool,
+  ProposeWikiReflectionTool,
   RecordWikiRunTool,
   createWorkspaceTools,
 } from "../src/index.js";
@@ -57,6 +58,7 @@ describe("local tools", () => {
       "wiki.evolve.prepare",
       "wiki.run.record",
       "wiki.answer.propose",
+      "wiki.reflect.propose",
     ]);
   });
 
@@ -169,10 +171,42 @@ describe("local tools", () => {
         changedFiles: [],
       },
     });
+    const reflectionTask = task.output as { id: string; digest: string };
+    const report = await new ProposeWikiReflectionTool(workspace).execute({
+      name: "wiki.reflect.propose",
+      input: {
+        task: task.output,
+        result: {
+          schemaVersion: "ai-lab.wiki-reflection-result.v1",
+          taskId: reflectionTask.id,
+          taskDigest: reflectionTask.digest,
+          outcome: "propose",
+          rationale: "The correction is reusable.",
+          page: {
+            kind: "failure",
+            title: "Scope Mismatch",
+            slug: "scope-mismatch",
+            summary: "Answer the requested scope.",
+            failure: "The response answered a different scope.",
+            trigger: "A request can refer to more than one memory layer.",
+            correction: ["Restate the requested scope."],
+            preventionChecks: ["The response answers the stated scope."],
+            hypotheses: [],
+            links: [],
+          },
+        },
+      },
+    });
 
     expect((task.output as { evidence: { id: string } }).evidence.id).toBe(runId);
+    expect(
+      (report.output as { candidateDiagnostics: { issues: unknown[] } }).candidateDiagnostics,
+    ).toMatchObject({ issues: [] });
     expect(createWorkspaceTools(workspace).map((tool) => tool.definition.name)).not.toContain(
       "wiki.reflect.prepare",
     );
+    await expect(
+      readFile(join(workspace.root, "wiki", "pages", "failures", "scope-mismatch.md"), "utf8"),
+    ).rejects.toThrow();
   });
 });

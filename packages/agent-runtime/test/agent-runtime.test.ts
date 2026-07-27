@@ -93,7 +93,7 @@ describe("agent runtime", () => {
     expect(query.contextFiles).toContain("pages/questions/what-is-durable-knowledge.md");
   });
 
-  it("prepares provider-neutral reflection tasks without invoking a model", async () => {
+  it("prepares and applies reviewed provider-neutral reflections without invoking a model", async () => {
     const workspace = await wikiWorkspace();
     const run = await recordWikiRun(workspace, {
       task: "review",
@@ -111,6 +111,22 @@ describe("agent runtime", () => {
 
     expect(task.evidence).toMatchObject({ kind: "recorded-run", id: run.id });
     await expect(workflow.validateTask(task)).resolves.toEqual(task);
+    const result = reflectionResult(task);
+    const report = await workflow.prepareReport(task, result, now());
+    await workflow.applyReviewed(
+      {
+        task,
+        result,
+        report,
+        acceptedDigest: report.digest,
+        reviewedBy: "Reviewer",
+        reviewedAt: new Date("2026-06-17T12:30:00.000Z"),
+      },
+      new Date("2026-06-17T13:00:00.000Z"),
+    );
+    await expect(
+      readFile(join(workspace.root, "wiki", "pages", "failures", "scope-mismatch.md"), "utf8"),
+    ).resolves.toContain("## Prevention Check");
   });
 
   it("returns a task-bound result without changing the live Wiki", async () => {
@@ -227,6 +243,28 @@ async function currentWikiFiles(root: string, evidencePath: string): Promise<str
   return Promise.all(
     ["index.md", "log.md", evidencePath].map((path) => readFile(join(root, "wiki", path), "utf8")),
   );
+}
+
+function reflectionResult(task: { id: string; digest: string }) {
+  return {
+    schemaVersion: "ai-lab.wiki-reflection-result.v1",
+    taskId: task.id,
+    taskDigest: task.digest,
+    outcome: "propose",
+    rationale: "The correction is reusable.",
+    page: {
+      kind: "failure",
+      title: "Scope Mismatch",
+      slug: "scope-mismatch",
+      summary: "Answer the requested scope.",
+      failure: "The response answered a different scope.",
+      trigger: "A request can refer to more than one memory layer.",
+      correction: ["Restate the requested scope."],
+      preventionChecks: ["The response answers the stated scope."],
+      hypotheses: [],
+      links: [],
+    },
+  };
 }
 
 function now(): Date {

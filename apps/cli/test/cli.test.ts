@@ -12,6 +12,7 @@ import type {
   WikiRebuildReport,
   WikiRebuildResult,
   WikiRebuildTask,
+  WikiReflectionReport,
   WikiReflectionTask,
 } from "@ai-lab/agent-runtime";
 import { externalRunnerFileSha256 } from "@ai-lab/agent-runtime";
@@ -20,6 +21,7 @@ import { runCli } from "../src/index.js";
 import {
   formatWikiProposalReview,
   formatWikiRebuildReview,
+  formatWikiReflectionReview,
   wikiRunnerConfigDigest,
 } from "../src/wiki.js";
 
@@ -199,6 +201,56 @@ describe("cli", () => {
     expect(loggedJson<{ artifact: string }>(log).artifact).toBe(
       ".ai-lab/wiki-exchange/reflection-task.json",
     );
+    await writeFile(
+      join(exchange, "reflection-result.json"),
+      `${JSON.stringify(reflectionResult(task))}\n`,
+      { encoding: "utf8", mode: 0o600 },
+    );
+    await runCli(
+      [
+        "node",
+        "ai-lab",
+        "wiki",
+        "reflect",
+        "propose",
+        "--task",
+        "reflection-task.json",
+        "--result",
+        "reflection-result.json",
+        "--out",
+        "reflection-report.json",
+      ],
+      root,
+    );
+    const report = await artifact<WikiReflectionReport>(root, "reflection-report.json");
+    await expect(
+      stat(join(root, "wiki", "pages", "failures", "scope-mismatch.md")),
+    ).rejects.toThrow();
+    await runCli(["node", "ai-lab", "wiki", "reflect", "review", "reflection-report.json"], root);
+    expect(String(log.mock.calls.at(-1)?.[0])).toContain(`Digest: ${report.digest}`);
+    expect(formatWikiReflectionReview({ ...report, rationale: "\u202e" })).toContain("\\u202e");
+    await runCli(
+      [
+        "node",
+        "ai-lab",
+        "wiki",
+        "reflect",
+        "apply",
+        "reflection-report.json",
+        "--task",
+        "reflection-task.json",
+        "--result",
+        "reflection-result.json",
+        "--reviewer",
+        "Reviewer",
+        "--accept-digest",
+        report.digest,
+      ],
+      root,
+    );
+    await expect(
+      readFile(join(root, "wiki", "pages", "failures", "scope-mismatch.md"), "utf8"),
+    ).resolves.toContain("## Correction");
   });
 
   it("runs a trusted external runner without exposing private runner inputs", async () => {
@@ -929,6 +981,28 @@ async function writeResult(
     })}\n`,
     { mode: 0o600 },
   );
+}
+
+function reflectionResult(task: WikiReflectionTask) {
+  return {
+    schemaVersion: "ai-lab.wiki-reflection-result.v1",
+    taskId: task.id,
+    taskDigest: task.digest,
+    outcome: "propose",
+    rationale: "The correction is reusable.",
+    page: {
+      kind: "failure",
+      title: "Scope Mismatch",
+      slug: "scope-mismatch",
+      summary: "Answer the requested scope.",
+      failure: "The response answered a different scope.",
+      trigger: "A request can refer to more than one memory layer.",
+      correction: ["Restate the requested scope."],
+      preventionChecks: ["The response answers the stated scope."],
+      hypotheses: [],
+      links: [],
+    },
+  };
 }
 
 function questionPath(root: string): string {

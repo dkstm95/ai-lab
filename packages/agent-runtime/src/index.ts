@@ -16,6 +16,7 @@ export type {
   WikiAnswerRunnerResult,
 } from "./wiki-workflow.js";
 export type { ApplyReviewedWikiRebuildInput } from "./wiki-rebuild-workflow.js";
+export type { ApplyReviewedWikiReflectionInput } from "./wiki-reflection-workflow.js";
 export { externalRunnerFileSha256 } from "@ai-lab/model-providers";
 export type {
   ExternalRunnerConfig,
@@ -31,6 +32,9 @@ export type {
   WikiRebuildResult,
   WikiRebuildTask,
   WikiReflectionTask,
+  WikiReflectionReport,
+  WikiReflectionResult,
+  WikiReflectionApplyResult,
 } from "@ai-lab/wiki";
 
 export interface AgentRuntime {

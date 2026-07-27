@@ -41,6 +41,21 @@ import {
   reflectionExpectedFiles,
 } from "./reflection-exchange.js";
 import {
+  reflectionIndexEntry,
+  reflectionIndexSection,
+  reflectionPagePath,
+  renderReflectionBody,
+} from "./reflection-page.js";
+import {
+  type WikiReflectionFile,
+  type WikiReflectionReport,
+  type WikiReflectionResult,
+  type WikiReflectionResultPage,
+  buildWikiReflectionReport,
+  parseWikiReflectionReport,
+  parseWikiReflectionResultForTask,
+} from "./reflection-result.js";
+import {
   WikiCandidateValidationError,
   type WikiPathExpectation,
   WikiSourceReferenceError,
@@ -109,6 +124,24 @@ export type {
   WikiReflectionTask,
   WikiReflectionTaskContext,
 } from "./reflection-exchange.js";
+export {
+  parseWikiReflectionReport,
+  parseWikiReflectionResult,
+  parseWikiReflectionResultForTask,
+  wikiReflectionReportSchemaVersion,
+  wikiReflectionResultJsonSchema,
+  wikiReflectionResultSchemaVersion,
+} from "./reflection-result.js";
+export type {
+  WikiReflectionDecisionPage,
+  WikiReflectionFailurePage,
+  WikiReflectionFile,
+  WikiReflectionIssue,
+  WikiReflectionPlaybookPage,
+  WikiReflectionReport,
+  WikiReflectionResult,
+  WikiReflectionResultPage,
+} from "./reflection-result.js";
 
 export {
   WikiCandidateValidationError,
@@ -204,6 +237,12 @@ export interface WikiRebuildApplyResult {
   readonly lint: WikiLintReport;
 }
 
+export interface WikiReflectionApplyResult {
+  readonly reportId: string;
+  readonly files: readonly string[];
+  readonly lint: WikiLintReport;
+}
+
 export interface RecordWikiRunInput {
   readonly task: string;
   readonly input: string;
@@ -266,11 +305,26 @@ export interface WikiRebuildApproval {
   readonly reviewedAt: string;
 }
 
+export interface WikiReflectionApproval {
+  readonly reportId: string;
+  readonly digest: string;
+  readonly accepted: true;
+  readonly reviewedBy: string;
+  readonly reviewedAt: string;
+}
+
 export interface ApplyWikiRebuildInput {
   readonly task: unknown;
   readonly result: unknown;
   readonly report: unknown;
   readonly approval: WikiRebuildApproval;
+}
+
+export interface ApplyWikiReflectionInput {
+  readonly task: unknown;
+  readonly result: unknown;
+  readonly report: unknown;
+  readonly approval: WikiReflectionApproval;
 }
 
 interface WikiAnswerDraft {
@@ -416,6 +470,14 @@ export async function validateCurrentWikiReflectionTask(
   taskValue: unknown,
 ): Promise<WikiReflectionTask> {
   const task = parseWikiReflectionTask(taskValue);
+  await assertWikiReflectionTaskCurrent(workspace, task);
+  return task;
+}
+
+async function assertWikiReflectionTaskCurrent(
+  workspace: Workspace,
+  task: WikiReflectionTask,
+): Promise<void> {
   const contexts = await readWikiContextFiles(
     workspace,
     task.contexts.map(({ path }) => path),
@@ -423,7 +485,41 @@ export async function validateCurrentWikiReflectionTask(
   if (JSON.stringify(contexts) !== JSON.stringify(task.contexts)) {
     throw new Error("Wiki reflection task contexts changed after preparation");
   }
-  return task;
+}
+
+export async function prepareWikiReflectionReport(
+  workspace: Workspace,
+  taskValue: unknown,
+  resultValue: unknown,
+  now: Date = new Date(),
+): Promise<WikiReflectionReport> {
+  const task = parseWikiReflectionTask(taskValue);
+  const result = parseWikiReflectionResultForTask(task, resultValue);
+  const generatedAt = new Date(now.getTime());
+  return withWikiWriteLock(workspace, (locked) =>
+    prepareWikiReflectionReportLocked(locked, task, result, generatedAt),
+  );
+}
+
+export async function applyWikiReflection(
+  workspace: Workspace,
+  input: ApplyWikiReflectionInput,
+  now: Date = new Date(),
+): Promise<WikiReflectionApplyResult> {
+  const snapshot = wikiReflectionApplicationSnapshot(input, now);
+  validateWikiReflectionApproval(snapshot.report, snapshot.approval);
+  return withWikiWriteLock(workspace, (locked) => applyReviewedWikiReflection(locked, snapshot));
+}
+
+function wikiReflectionApplicationSnapshot(input: ApplyWikiReflectionInput, now: Date) {
+  const task = parseWikiReflectionTask(input.task);
+  return {
+    task,
+    result: parseWikiReflectionResultForTask(task, input.result),
+    report: parseWikiReflectionReport(input.report),
+    approval: structuredClone(input.approval),
+    now: new Date(now.getTime()),
+  };
 }
 
 export async function prepareWikiRebuildTask(
@@ -1529,8 +1625,251 @@ function reflectionConstraints(): string[] {
     "Do not cite raw/runs as a durable public source or add it to page frontmatter.",
     "Do not modify raw/sources, raw/runs, AGENTS.md, SOUL.md, docs, index.md, or log.md.",
     "Prepare no more than one coherent failure, playbook, or decision candidate.",
-    "Do not write the live wiki; a later proposal and human approval must promote it.",
+    "Do not write the live wiki; a validated report and exact human digest approval must promote it.",
   ];
+}
+
+async function prepareWikiReflectionReportLocked(
+  workspace: Workspace,
+  task: WikiReflectionTask,
+  result: WikiReflectionResult,
+  generatedAt: Date,
+): Promise<WikiReflectionReport> {
+  await assertWikiReflectionTaskCurrent(workspace, task);
+  const files = await reflectionCandidateFiles(workspace, result, generatedAt);
+  const reports = await reflectionLintReports(workspace, files, generatedAt);
+  return buildWikiReflectionReport({
+    taskId: task.id,
+    taskDigest: task.digest,
+    generatedAt: generatedAt.toISOString(),
+    outcome: result.outcome,
+    rationale: result.rationale,
+    files,
+    baseHashes: await hashWikiFiles(workspace, reflectionBasePaths(files)),
+    baselineDiagnostics: reports.baseline,
+    candidateDiagnostics: reports.candidate,
+    introducedIssues: issueDifference(reports.candidate.issues, reports.baseline.issues),
+    resolvedIssues: issueDifference(reports.baseline.issues, reports.candidate.issues),
+  });
+}
+
+async function reflectionCandidateFiles(
+  workspace: Workspace,
+  result: WikiReflectionResult,
+  generatedAt: Date,
+): Promise<WikiReflectionFile[]> {
+  if (result.outcome === "skip") return [];
+  const pageFile = await reflectionPageFile(workspace, result.page, generatedAt);
+  return [
+    {
+      path: "index.md",
+      content: await indexWithReflection(workspace, pageFile.path, result.page),
+    },
+    pageFile,
+  ];
+}
+
+async function reflectionPageFile(
+  workspace: Workspace,
+  page: WikiReflectionResultPage,
+  generatedAt: Date,
+): Promise<WikiReflectionFile> {
+  const path = reflectionPagePath(page);
+  const existing = await optionalWikiPage(workspace, path);
+  assertReflectionTarget(page, existing);
+  return {
+    path,
+    content: renderWikiPage(
+      reflectionMetadata(page, existing, generatedAt),
+      renderReflectionBody(page),
+    ),
+  };
+}
+
+function assertReflectionTarget(
+  page: WikiReflectionResultPage,
+  existing: WikiPage | undefined,
+): void {
+  if (slugify(page.title) !== page.slug) {
+    throw new Error("Wiki reflection page slug must match its title");
+  }
+  if (
+    existing !== undefined &&
+    (existing.metadata.kind !== page.kind ||
+      existing.metadata.slug !== page.slug ||
+      existing.metadata.status !== "active")
+  ) {
+    throw new Error("Wiki reflection cannot overwrite an incompatible existing page");
+  }
+}
+
+function reflectionMetadata(
+  page: WikiReflectionResultPage,
+  existing: WikiPage | undefined,
+  generatedAt: Date,
+): WikiPageMetadata {
+  const timestamp = generatedAt.toISOString();
+  return {
+    title: page.title,
+    slug: page.slug,
+    kind: page.kind,
+    status: "active",
+    createdAt: existing?.metadata.createdAt ?? timestamp,
+    updatedAt: timestamp,
+    reviewAfter: new Date(generatedAt.getTime() + 180 * 86_400_000).toISOString(),
+    sources: [],
+  };
+}
+
+async function indexWithReflection(
+  workspace: Workspace,
+  path: string,
+  page: WikiReflectionResultPage,
+): Promise<string> {
+  const index = await readFile(wikiPath(workspace, "index.md"), "utf8");
+  if (index.includes(`(${path})`)) return index;
+  const heading = `## ${reflectionIndexSection(page.kind)}`;
+  const entry = reflectionIndexEntry(page, path);
+  return insertIndexEntry(index, heading, entry);
+}
+
+function insertIndexEntry(index: string, heading: string, entry: string): string {
+  const span = indexSectionSpan(index, heading);
+  if (span === undefined) return `${index.trimEnd()}\n\n${heading}\n\n${entry}\n`;
+  const before = index.slice(0, span.end).trimEnd();
+  const after = index.slice(span.end).trimStart();
+  return after.length === 0 ? `${before}\n\n${entry}\n` : `${before}\n\n${entry}\n\n${after}`;
+}
+
+function indexSectionSpan(
+  index: string,
+  heading: string,
+): { readonly start: number; readonly end: number } | undefined {
+  const start = index.indexOf(heading);
+  if (start < 0) return undefined;
+  const next = index.indexOf("\n## ", start + heading.length);
+  const end = next < 0 ? index.length : next;
+  return { start, end };
+}
+
+async function reflectionLintReports(
+  workspace: Workspace,
+  files: readonly WikiReflectionFile[],
+  generatedAt: Date,
+) {
+  const baseline = portableWikiLintReport(workspace, await lintWiki(workspace, generatedAt));
+  if (files.length === 0) return { baseline, candidate: baseline };
+  const candidate = await previewWikiFiles(workspace, files, (preview) =>
+    lintWiki(preview, generatedAt),
+  );
+  return { baseline, candidate: portableWikiLintReport(workspace, candidate) };
+}
+
+function reflectionBasePaths(files: readonly WikiReflectionFile[]): string[] {
+  return unique(["schema.md", "index.md", ...files.map(({ path }) => path)]).sort();
+}
+
+function validateWikiReflectionApproval(
+  report: WikiReflectionReport,
+  approval: WikiReflectionApproval,
+): void {
+  if (
+    approval.accepted !== true ||
+    approval.reportId !== report.id ||
+    approval.digest !== report.digest
+  ) {
+    throw new Error("Wiki reflection approval does not match the reviewed report");
+  }
+  if (approval.reviewedBy.trim().length === 0 || !validIsoDate(approval.reviewedAt)) {
+    throw new Error("Wiki reflection approval requires a reviewer and ISO review timestamp");
+  }
+  if (Date.parse(approval.reviewedAt) < Date.parse(report.generatedAt)) {
+    throw new Error("Wiki reflection approval cannot predate the reviewed report");
+  }
+}
+
+async function applyReviewedWikiReflection(
+  workspace: Workspace,
+  snapshot: {
+    readonly task: WikiReflectionTask;
+    readonly result: WikiReflectionResult;
+    readonly report: WikiReflectionReport;
+    readonly approval: WikiReflectionApproval;
+    readonly now: Date;
+  },
+): Promise<WikiReflectionApplyResult> {
+  if (snapshot.report.outcome !== "propose") {
+    throw new Error("A skipped Wiki reflection cannot be applied");
+  }
+  await assertWikiReflectionNotApplied(workspace, snapshot.report.id);
+  const current = await currentWikiReflectionReport(workspace, snapshot);
+  if (current.candidateDiagnostics.issues.length > 0) {
+    throw new WikiCandidateValidationError(current.candidateDiagnostics);
+  }
+  return promoteWikiReflection(workspace, snapshot, current);
+}
+
+async function promoteWikiReflection(
+  workspace: Workspace,
+  snapshot: {
+    readonly task: WikiReflectionTask;
+    readonly result: WikiReflectionResult;
+    readonly report: WikiReflectionReport;
+    readonly approval: WikiReflectionApproval;
+    readonly now: Date;
+  },
+  current: WikiReflectionReport,
+): Promise<WikiReflectionApplyResult> {
+  const promoted = await promoteWikiFiles(workspace, {
+    files: current.files,
+    auditEntry: reflectionAuditEntry(snapshot.report, snapshot.approval, snapshot.now),
+    validate: lintWiki,
+    prePromote: async () => {
+      await currentWikiReflectionReport(workspace, snapshot);
+    },
+  });
+  return { reportId: current.id, files: promoted.files, lint: promoted.lint };
+}
+
+async function currentWikiReflectionReport(
+  workspace: Workspace,
+  snapshot: {
+    readonly task: WikiReflectionTask;
+    readonly result: WikiReflectionResult;
+    readonly report: WikiReflectionReport;
+  },
+): Promise<WikiReflectionReport> {
+  const current = await prepareWikiReflectionReportLocked(
+    workspace,
+    snapshot.task,
+    snapshot.result,
+    new Date(snapshot.report.generatedAt),
+  );
+  if (current.digest !== snapshot.report.digest) {
+    throw new Error("Wiki reflection report is stale or does not match its task and result");
+  }
+  return current;
+}
+
+async function assertWikiReflectionNotApplied(
+  workspace: Workspace,
+  reportId: string,
+): Promise<void> {
+  await assertWikiPath(workspace, { path: "log.md", type: "file", allowMissing: false });
+  const log = await readFile(wikiPath(workspace, "log.md"), "utf8");
+  if (log.includes(`reflection | ${reportId} |`)) {
+    throw new Error(`Wiki reflection report was already applied: ${reportId}`);
+  }
+}
+
+function reflectionAuditEntry(
+  report: WikiReflectionReport,
+  approval: WikiReflectionApproval,
+  appliedAt: Date,
+): string {
+  return `## [${appliedAt.toISOString()}] reflection | ${report.id} | digest=${
+    report.digest
+  } | reviewer=${auditValue(approval.reviewedBy)} | reviewedAt=${approval.reviewedAt}`;
 }
 
 function evolvePageFiles(
@@ -2357,7 +2696,7 @@ async function sourceReferenceIssue(
 }
 
 function orphanPageIssues(page: WikiPage, pages: readonly WikiPage[]): WikiLintIssue[] {
-  if (page.metadata.kind === "source" || page.metadata.kind === "question") {
+  if (!["concept", "entity", "synthesis"].includes(page.metadata.kind)) {
     return [];
   }
   return inboundLinks(page, pages) === 0
@@ -2545,7 +2884,7 @@ function schemaSeed(): string {
 function schemaSections(): string[] {
   return [
     "# Wiki Schema",
-    "## Role\n\nThe LLM agent proposes source-backed changes. For answer proposals, a trusted caller attests that a human reviewed the exact bytes; the package validates the attestation and current hashes but does not authenticate the reviewer.",
+    "## Role\n\nThe LLM agent prepares source-backed knowledge and evidence-bound reflections. A trusted caller attests that a human reviewed the exact proposal or report bytes; the package validates the attestation and current hashes but does not authenticate the reviewer.",
     schemaLayerRules(),
     schemaPageRules(),
     schemaWorkflowRules(),
@@ -2571,6 +2910,7 @@ function schemaPageRules(): string {
     "- Every accepted claim must include a following source line.",
     "- A source path proves provenance, not truth. Accepted status requires review of the exact claim/source pair.",
     "- Keep each accepted claim distinct; do not duplicate the same claim/source pair across pages.",
+    "- Reflection pages keep `sources` empty because raw runs stay local; the task and report digests bind their evidence.",
     ...writingConstraints().map((constraint) => `- ${constraint}`),
     "- Keep one main idea per sentence. Split any sentence that is hard to understand in one pass.",
     "- Prefer wiki links like [[concept-slug]] for reusable concepts.",
@@ -2585,8 +2925,10 @@ function schemaWorkflowRules(): string {
     "Read index.md first, then relevant pages. Answer with citations to wiki pages or raw sources. Prepare reusable answers as proposals with explicit claim/source pairs. Do not promote them before approval.",
     "## Evolve",
     "Manual or automated agents read lint issues, recent runs, and candidate pages, then prepare small source-backed candidate updates. Evolve approval and promotion are not implemented yet.",
+    "## Reflect",
+    "Prepare a task from one explicit run or summary, feedback, validation, and changed files. Return a typed failure, playbook, decision, or skip result. The package renders and lints candidate Markdown. Promote it only after review of the exact report digest.",
     "## Lint",
-    "Check broken links, orphan pages, stale TODOs, unsupported sources, conflicted or review pages, duplicate slugs, duplicate accepted claims, stale active pages, and index drift.",
+    "Check broken links, orphan concept/entity/synthesis pages, stale TODOs, unsupported sources, conflicted or review pages, duplicate slugs, duplicate accepted claims, stale active pages, and index drift.",
   ].join("\n\n");
 }
 
