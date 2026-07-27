@@ -99,7 +99,8 @@ still cannot prove per-request quota or billing. The contracts are in `docs/exte
 
 - Re-audit built-in subscription profiles for new exact CLI versions, and add another profile only
   when its prompt transport, authentication route, and tool controls preserve the shared contracts.
-- Extend `packages/wiki` with bidirectional links, retrieval, rebuild promotion only after shadow evaluation, reflection task packets, and approved self-evolution memory pages as behavior becomes concrete.
+- Extend `packages/wiki` with bidirectional links, retrieval, reflection task packets, and approved
+  self-evolution memory pages as behavior becomes concrete.
 - Extend `packages/subbrain` with embedding search, graph traversal, and relationship context after the deterministic baseline passes.
 - Add `packages/mcp` when agent runtime, local tools, or workspace capabilities need to be exposed to external agents.
 - Add `packages/evals` or `evals/` when the same validation logic repeats across multiple wiki or agent runs.

@@ -104,7 +104,8 @@ runner digest를 검토해야 한다. 상세 규약은 `docs/external-runner.md`
 apply는 사람이 검토한 전체 digest를 요구한다. 이후 현재 Wiki, source hash, candidate
 lint, 검토한 byte를 다시 확인하고 승격과 audit 기록을 수행한다.
 
-기존 source·concept page의 비파괴 재생성 및 비교 절차는 `docs/wiki-rebuild.md`에 있다.
+기존 source·concept page의 비파괴 재생성, 비교, digest 승인 기반 승격 절차는
+`docs/wiki-rebuild.md`에 있다.
 
 source 선택은 신뢰된 integration이 소유한다. agent-safe tool은 source를 가져오거나 외부
 전달용 task를 만들거나 proposal을 apply할 수 없다. 경로 이탈, symbolic link, 오래된 task,

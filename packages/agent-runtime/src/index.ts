@@ -14,6 +14,7 @@ export type {
   WikiAnswerRunnerOptions,
   WikiAnswerRunnerResult,
 } from "./wiki-workflow.js";
+export type { ApplyReviewedWikiRebuildInput } from "./wiki-rebuild-workflow.js";
 export { externalRunnerFileSha256 } from "@ai-lab/model-providers";
 export type {
   ExternalRunnerConfig,
@@ -25,6 +26,7 @@ export type {
   WikiAnswerTask,
   WikiProposal,
   WikiRebuildReport,
+  WikiRebuildApplyResult,
   WikiRebuildResult,
   WikiRebuildTask,
 } from "@ai-lab/wiki";

@@ -21,6 +21,7 @@ import {
   type WikiRebuildTask,
   addWikiSource,
   applyWikiProposal,
+  applyWikiRebuild,
   initWiki,
   lintWiki,
   parseWikiAnswerResult,
@@ -586,6 +587,60 @@ describe("wiki", () => {
     await expect(rebuildWikiState(workspace.root)).resolves.toEqual(before);
   });
 
+  it("rebuilds a supported page without requiring a paired page kind", async () => {
+    const workspace = await tempWorkspace();
+    await prepareRebuildWiki(workspace.root);
+    await rm(pagePath(workspace.root));
+    await writeFile(
+      rebuildSourcePagePath(workspace.root),
+      renderWikiPage(
+        rebuildSourceMetadata(),
+        "## Summary\n\nOriginal source summary.\n\n## Key Claims\n\n- accepted: Original source claim.\n  source: raw/sources/karpathy-llm-wiki.md\n\n## Links\n",
+      ),
+    );
+    await writeFile(
+      join(workspace.root, "wiki", "index.md"),
+      "# Wiki Index\n\n- [LLM Wiki Source](pages/sources/llm-wiki-source.md)\n",
+      "utf8",
+    );
+
+    const task = await prepareWikiRebuildTask(workspace, rebuildTaskInput(), now());
+    const result = {
+      ...rebuildResult(task),
+      pages: rebuildResult(task).pages.map((page) => ({ ...page, links: [] })),
+    };
+    const report = await prepareWikiRebuildReport(workspace, task, result);
+
+    expect(task.targets.map((target) => target.path)).toEqual(["pages/sources/llm-wiki-source.md"]);
+    expect(report.files.map((file) => file.path)).toEqual(["pages/sources/llm-wiki-source.md"]);
+    expect(report.candidateDiagnostics.issues).toEqual([]);
+  });
+
+  it("reports non-claim sections removed by canonical rebuild output", async () => {
+    const workspace = await tempWorkspace();
+    await prepareRebuildWiki(workspace.root);
+    const sourcePath = rebuildSourcePagePath(workspace.root);
+    const source = await readFile(sourcePath, "utf8");
+    await writeFile(
+      sourcePath,
+      `${source}\n## Application Notes\n\n- hypothesis: Test before promotion.\n`,
+      "utf8",
+    );
+    const task = await prepareWikiRebuildTask(workspace, rebuildTaskInput(), now());
+
+    const report = await prepareWikiRebuildReport(workspace, task, rebuildResult(task));
+    const comparison = report.comparisons.find(
+      (candidate) => candidate.path === "pages/sources/llm-wiki-source.md",
+    );
+
+    expect(comparison).toMatchObject({
+      baselineSections: ["Application Notes", "Key Claims", "Links", "Summary"],
+      candidateSections: ["Key Claims", "Links", "Summary"],
+      missingSections: ["Application Notes"],
+      addedSections: [],
+    });
+  });
+
   it("rejects unsupported rebuild target kinds in self-consistent tasks", async () => {
     const workspace = await tempWorkspace();
     await prepareRebuildWiki(workspace.root);
@@ -917,6 +972,101 @@ describe("wiki", () => {
     await writeFile(rawSourcePath(workspace.root), "# Changed source\n", "utf8");
     await expect(prepareWikiRebuildReport(workspace, task, result)).rejects.toThrow("stale");
     await expect(stat(join(workspace.root, "wiki", "pages", "questions"))).resolves.toBeDefined();
+  });
+
+  it("applies only an exact reviewed rebuild report and records it once", async () => {
+    const workspace = await tempWorkspace();
+    await prepareRebuildWiki(workspace.root);
+    const task = await prepareWikiRebuildTask(workspace, rebuildTaskInput(), now());
+    const result = rebuildResult(task);
+    const report = await prepareWikiRebuildReport(workspace, task, result);
+    const before = await rebuildWikiState(workspace.root);
+
+    await expect(
+      applyWikiRebuild(
+        workspace,
+        rebuildApplication(task, result, report, {
+          ...rebuildApproval(report),
+          digest: "0".repeat(64),
+        }),
+        new Date("2026-06-17T13:00:00.000Z"),
+      ),
+    ).rejects.toThrow("does not match");
+    await expect(rebuildWikiState(workspace.root)).resolves.toEqual(before);
+
+    const alternativeResult = {
+      ...result,
+      pages: result.pages.map((page, index) =>
+        index === 0 ? { ...page, summary: "Different reviewed summary." } : page,
+      ),
+    };
+    const alternativeReport = await prepareWikiRebuildReport(workspace, task, alternativeResult);
+    await expect(
+      applyWikiRebuild(
+        workspace,
+        rebuildApplication(task, result, alternativeReport),
+        new Date("2026-06-17T13:00:00.000Z"),
+      ),
+    ).rejects.toThrow("does not match its task and result");
+    await expect(rebuildWikiState(workspace.root)).resolves.toEqual(before);
+
+    const applied = await applyWikiRebuild(
+      workspace,
+      rebuildApplication(task, result, report),
+      new Date("2026-06-17T13:00:00.000Z"),
+    );
+
+    expect(applied.reportId).toBe(report.id);
+    expect(applied.lint.issues).toEqual([]);
+    await expect(readFile(pagePath(workspace.root), "utf8")).resolves.toContain(
+      "Rebuilt concept claim.",
+    );
+    await expect(readFile(join(workspace.root, "wiki", "log.md"), "utf8")).resolves.toContain(
+      `rebuild | ${report.id} | digest=${report.digest}`,
+    );
+    await expect(
+      applyWikiRebuild(workspace, rebuildApplication(task, result, report)),
+    ).rejects.toThrow("already applied");
+  });
+
+  it("rejects a reviewed rebuild when its task becomes stale", async () => {
+    const workspace = await tempWorkspace();
+    await prepareRebuildWiki(workspace.root);
+    const task = await prepareWikiRebuildTask(workspace, rebuildTaskInput(), now());
+    const result = rebuildResult(task);
+    const report = await prepareWikiRebuildReport(workspace, task, result);
+    const before = await readFile(pagePath(workspace.root), "utf8");
+    await writeFile(rawSourcePath(workspace.root), "# Changed after review\n", "utf8");
+
+    await expect(
+      applyWikiRebuild(workspace, rebuildApplication(task, result, report)),
+    ).rejects.toThrow("stale");
+    await expect(readFile(pagePath(workspace.root), "utf8")).resolves.toBe(before);
+  });
+
+  it("does not promote a rebuild that fails current full-wiki lint", async () => {
+    const workspace = await tempWorkspace();
+    await prepareRebuildWiki(workspace.root);
+    const conceptPath = pagePath(workspace.root);
+    const concept = await readFile(conceptPath, "utf8");
+    await writeFile(
+      conceptPath,
+      concept.replace(
+        "updatedAt: 2026-06-17T12:00:00.000Z",
+        "updatedAt: 2026-06-17T12:00:00.000Z\nreviewAfter: 2026-06-18T12:00:00.000Z",
+      ),
+      "utf8",
+    );
+    const task = await prepareWikiRebuildTask(workspace, rebuildTaskInput(), now());
+    const result = rebuildResult(task);
+    const report = await prepareWikiRebuildReport(workspace, task, result);
+    const before = await rebuildWikiState(workspace.root);
+
+    expect(report.candidateDiagnostics.issues).toEqual([]);
+    await expect(
+      applyWikiRebuild(workspace, rebuildApplication(task, result, report)),
+    ).rejects.toThrow("lint issue");
+    await expect(rebuildWikiState(workspace.root)).resolves.toEqual(before);
   });
 
   it("prepares deterministic answer proposals without changing the live wiki", async () => {
@@ -1600,6 +1750,25 @@ function approval(proposal: WikiProposal, reviewedAt = "2026-06-17T12:30:00.000Z
     reviewedBy: "SeungIl",
     reviewedAt,
   };
+}
+
+function rebuildApproval(report: { id: string; digest: string }) {
+  return {
+    reportId: report.id,
+    digest: report.digest,
+    accepted: true as const,
+    reviewedBy: "SeungIl",
+    reviewedAt: "2026-06-17T12:30:00.000Z",
+  };
+}
+
+function rebuildApplication(
+  task: WikiRebuildTask,
+  result: WikiRebuildResult,
+  report: { id: string; digest: string },
+  approval = rebuildApproval(report),
+) {
+  return { task, result, report, approval };
 }
 
 function tamperedProposals(proposal: WikiProposal): WikiProposal[] {

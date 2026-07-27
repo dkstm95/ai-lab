@@ -21,8 +21,10 @@ import {
   type WikiRebuildTask,
   buildWikiRebuildReport,
   buildWikiRebuildTask,
+  parseWikiRebuildReport,
   parseWikiRebuildResultForTask,
   parseWikiRebuildTask,
+  wikiRebuildReportSchemaVersion,
 } from "./rebuild-exchange.js";
 import {
   WikiCandidateValidationError,
@@ -165,6 +167,12 @@ export interface WikiApplyResult {
   readonly lint: WikiLintReport;
 }
 
+export interface WikiRebuildApplyResult {
+  readonly reportId: string;
+  readonly files: readonly string[];
+  readonly lint: WikiLintReport;
+}
+
 export interface RecordWikiRunInput {
   readonly task: string;
   readonly input: string;
@@ -217,6 +225,21 @@ export interface WikiApproval {
   readonly accepted: true;
   readonly reviewedBy: string;
   readonly reviewedAt: string;
+}
+
+export interface WikiRebuildApproval {
+  readonly reportId: string;
+  readonly digest: string;
+  readonly accepted: true;
+  readonly reviewedBy: string;
+  readonly reviewedAt: string;
+}
+
+export interface ApplyWikiRebuildInput {
+  readonly task: unknown;
+  readonly result: unknown;
+  readonly report: unknown;
+  readonly approval: WikiRebuildApproval;
 }
 
 interface WikiAnswerDraft {
@@ -372,6 +395,27 @@ export async function prepareWikiRebuildReport(
   return withWikiWriteLock(workspace, (locked) =>
     prepareWikiRebuildReportLocked(locked, task, result),
   );
+}
+
+export async function applyWikiRebuild(
+  workspace: Workspace,
+  input: ApplyWikiRebuildInput,
+  now: Date = new Date(),
+): Promise<WikiRebuildApplyResult> {
+  const snapshot = wikiRebuildApplicationSnapshot(input, now);
+  validateWikiRebuildApproval(snapshot.report, snapshot.approval);
+  return withWikiWriteLock(workspace, (locked) => applyReviewedWikiRebuild(locked, snapshot));
+}
+
+function wikiRebuildApplicationSnapshot(input: ApplyWikiRebuildInput, now: Date) {
+  const task = parseWikiRebuildTask(input.task);
+  return {
+    task,
+    result: parseWikiRebuildResultForTask(task, input.result),
+    report: parseWikiRebuildReport(input.report),
+    approval: structuredClone(input.approval),
+    now: new Date(now.getTime()),
+  };
 }
 
 export async function prepareWikiAnswerTask(
@@ -798,13 +842,8 @@ function rebuildTarget(workspace: Workspace, page: WikiPage): WikiRebuildTarget 
 }
 
 function assertRebuildTargetCoverage(targets: readonly WikiRebuildTarget[]): void {
-  if (
-    targets.length === 0 ||
-    targets.length > 10 ||
-    !targets.some((target) => target.kind === "source") ||
-    !targets.some((target) => target.kind === "concept")
-  ) {
-    throw new Error("Wiki rebuild v1 requires one to ten existing source and concept pages");
+  if (targets.length === 0 || targets.length > 10) {
+    throw new Error("Wiki rebuild v1 requires one to ten existing source or concept pages");
   }
 }
 
@@ -834,6 +873,74 @@ async function assertRebuildTaskCurrent(
   }
 }
 
+function validateWikiRebuildApproval(
+  report: WikiRebuildReport,
+  approval: WikiRebuildApproval,
+): void {
+  if (
+    approval.accepted !== true ||
+    approval.reportId !== report.id ||
+    approval.digest !== report.digest
+  ) {
+    throw new Error("Wiki rebuild approval does not match the reviewed report");
+  }
+  if (approval.reviewedBy.trim().length === 0 || !validIsoDate(approval.reviewedAt)) {
+    throw new Error("Wiki rebuild approval requires a reviewer and ISO review timestamp");
+  }
+  if (Date.parse(approval.reviewedAt) < Date.parse(report.generatedAt)) {
+    throw new Error("Wiki rebuild approval cannot predate the reviewed report");
+  }
+}
+
+async function applyReviewedWikiRebuild(
+  workspace: Workspace,
+  snapshot: {
+    readonly task: WikiRebuildTask;
+    readonly result: WikiRebuildResult;
+    readonly report: WikiRebuildReport;
+    readonly approval: WikiRebuildApproval;
+    readonly now: Date;
+  },
+): Promise<WikiRebuildApplyResult> {
+  await assertWikiRebuildNotApplied(workspace, snapshot.report.id);
+  const current = await currentWikiRebuildReport(workspace, snapshot);
+  if (current.candidateDiagnostics.issues.length > 0) {
+    throw new WikiCandidateValidationError(current.candidateDiagnostics);
+  }
+  const promoted = await promoteWikiFiles(workspace, {
+    files: current.files,
+    auditEntry: rebuildAuditEntry(snapshot.report, snapshot.approval, snapshot.now),
+    validate: lintWiki,
+    prePromote: async () => {
+      await currentWikiRebuildReport(workspace, snapshot);
+    },
+  });
+  return { reportId: snapshot.report.id, files: promoted.files, lint: promoted.lint };
+}
+
+async function currentWikiRebuildReport(
+  workspace: Workspace,
+  snapshot: {
+    readonly task: WikiRebuildTask;
+    readonly result: WikiRebuildResult;
+    readonly report: WikiRebuildReport;
+  },
+): Promise<WikiRebuildReport> {
+  const current = await prepareWikiRebuildReportLocked(workspace, snapshot.task, snapshot.result);
+  if (current.digest !== snapshot.report.digest) {
+    throw new Error("Wiki rebuild report is stale or does not match its task and result");
+  }
+  return current;
+}
+
+async function assertWikiRebuildNotApplied(workspace: Workspace, id: string): Promise<void> {
+  await assertWikiPath(workspace, { path: "log.md", type: "file", allowMissing: false });
+  const log = await readFile(wikiPath(workspace, "log.md"), "utf8");
+  if (log.includes(`rebuild | ${id} |`)) {
+    throw new Error(`Wiki rebuild report was already applied: ${id}`);
+  }
+}
+
 async function prepareWikiRebuildReportLocked(
   workspace: Workspace,
   task: WikiRebuildTask,
@@ -844,7 +951,7 @@ async function prepareWikiRebuildReportLocked(
   const reports = await rebuildLintReports(workspace, files, task.generatedAt);
   const comparisons = await rebuildComparisons(workspace, files);
   return buildWikiRebuildReport({
-    schemaVersion: "ai-lab.wiki-rebuild-report.v1",
+    schemaVersion: wikiRebuildReportSchemaVersion,
     taskId: task.id,
     taskDigest: task.digest,
     generatedAt: task.generatedAt,
@@ -977,6 +1084,7 @@ function compareRebuildPages(
     baselineSha256: sha256(baseline.content),
     candidateSha256: sha256(candidate.content),
     ...compareRebuildClaims(baseline, candidate),
+    ...compareRebuildSections(baseline, candidate),
     ...compareRebuildLinks(baseline, candidate),
     ...compareRebuildSources(baseline, candidate),
   };
@@ -1003,6 +1111,25 @@ function compareRebuildLinks(baseline: WikiPage, candidate: WikiPage) {
     missingLinks: stringDifference(baselineLinks, candidateLinks),
     addedLinks: stringDifference(candidateLinks, baselineLinks),
   };
+}
+
+function compareRebuildSections(baseline: WikiPage, candidate: WikiPage) {
+  const baselineSections = wikiSections(baseline.content);
+  const candidateSections = wikiSections(candidate.content);
+  return {
+    baselineSections,
+    candidateSections,
+    missingSections: stringDifference(baselineSections, candidateSections),
+    addedSections: stringDifference(candidateSections, baselineSections),
+  };
+}
+
+function wikiSections(content: string): string[] {
+  const sections = content
+    .split("\n")
+    .map((line) => /^##[ \t]+(.+?)[ \t]*#*[ \t]*$/.exec(line)?.[1]?.trim())
+    .filter((section): section is string => section !== undefined && section.length > 0);
+  return unique(sections).sort();
 }
 
 function compareRebuildSources(baseline: WikiPage, candidate: WikiPage) {
@@ -1867,6 +1994,16 @@ function proposalAuditEntry(
   } | reviewer=${auditValue(approval.reviewedBy)} | reviewedAt=${
     approval.reviewedAt
   } | ${auditValue(proposal.note)}`;
+}
+
+function rebuildAuditEntry(
+  report: WikiRebuildReport,
+  approval: WikiRebuildApproval,
+  appliedAt: Date,
+): string {
+  return `## [${appliedAt.toISOString()}] rebuild | ${report.id} | digest=${
+    report.digest
+  } | reviewer=${auditValue(approval.reviewedBy)} | reviewedAt=${approval.reviewedAt}`;
 }
 
 function auditValue(value: string): string {

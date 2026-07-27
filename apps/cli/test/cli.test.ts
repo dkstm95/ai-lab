@@ -266,7 +266,7 @@ describe("cli", () => {
     );
   });
 
-  it("compares a manual shadow rebuild without changing the live Wiki", async () => {
+  it("applies a manual shadow rebuild only after exact report review", async () => {
     const root = await tempRoot();
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     await writeFile(join(root, "source.md"), "# Research\nDurable knowledge is reusable.\n");
@@ -322,8 +322,53 @@ describe("cli", () => {
     expect(formatWikiRebuildReview({ ...report, taskId: "\u202e" })).toContain("\\u202e");
     await expect(rebuildLiveWikiState(root)).resolves.toEqual(before);
     await expect(
-      runCli(["node", "ai-lab", "wiki", "rebuild", "apply", "rebuild-report.json"], root),
-    ).rejects.toThrow("Unknown wiki command");
+      runCli(
+        [
+          "node",
+          "ai-lab",
+          "wiki",
+          "rebuild",
+          "apply",
+          "rebuild-report.json",
+          "--task",
+          "rebuild-task.json",
+          "--result",
+          "rebuild-result.json",
+          "--reviewer",
+          "Reviewer",
+          "--accept-digest",
+          "f".repeat(64),
+        ],
+        root,
+      ),
+    ).rejects.toThrow("does not match");
+    await expect(rebuildLiveWikiState(root)).resolves.toEqual(before);
+
+    await runCli(
+      [
+        "node",
+        "ai-lab",
+        "wiki",
+        "rebuild",
+        "apply",
+        "rebuild-report.json",
+        "--task",
+        "rebuild-task.json",
+        "--result",
+        "rebuild-result.json",
+        "--reviewer",
+        "Reviewer",
+        "--accept-digest",
+        report.digest,
+      ],
+      root,
+    );
+    await expect(readFile(join(root, "wiki", "log.md"), "utf8")).resolves.toContain(
+      `rebuild | ${report.id} | digest=${report.digest}`,
+    );
+    await expect(
+      readFile(join(root, "wiki", task.targets[0]?.path ?? ""), "utf8"),
+    ).resolves.toContain("Rebuilt");
   });
 
   it("does not spawn when a trusted static file changes after disclosure", async () => {

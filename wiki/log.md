@@ -27,3 +27,5 @@
 ## [2026-07-27T02:29:08.000Z] update | apply plain-language and focused-sentence writing rules to the wiki and data moat synthesis
 
 ## [2026-07-27T02:34:58.000Z] update | adopt Orwell writing rules and remove stale moat metaphors from the AI data synthesis
+
+## [2026-07-27T07:40:07.000Z] source | Karpathy LLM Wiki Original Verification | karpathy-llm-wiki-original-verification

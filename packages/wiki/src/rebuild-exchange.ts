@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 export const wikiRebuildTaskSchemaVersion = "ai-lab.wiki-rebuild-task.v1";
 export const wikiRebuildResultSchemaVersion = "ai-lab.wiki-rebuild-result.v1";
-export const wikiRebuildReportSchemaVersion = "ai-lab.wiki-rebuild-report.v1";
+export const wikiRebuildReportSchemaVersion = "ai-lab.wiki-rebuild-report.v2";
 
 export const wikiRebuildResultJsonSchema = {
   type: "object",
@@ -129,6 +129,10 @@ export interface WikiRebuildComparison {
   readonly retainedClaimCount: number;
   readonly missingClaims: readonly WikiRebuildClaim[];
   readonly addedClaims: readonly WikiRebuildClaim[];
+  readonly baselineSections: readonly string[];
+  readonly candidateSections: readonly string[];
+  readonly missingSections: readonly string[];
+  readonly addedSections: readonly string[];
   readonly baselineLinks: readonly string[];
   readonly candidateLinks: readonly string[];
   readonly missingLinks: readonly string[];
@@ -213,6 +217,10 @@ const comparisonKeys = [
   "retainedClaimCount",
   "missingClaims",
   "addedClaims",
+  "baselineSections",
+  "candidateSections",
+  "missingSections",
+  "addedSections",
   "baselineLinks",
   "candidateLinks",
   "missingLinks",
@@ -573,6 +581,7 @@ function assertComparison(comparison: WikiRebuildComparison): void {
     throw new Error("Wiki rebuild comparison is invalid");
   }
   assertClaimComparison(comparison);
+  assertSectionComparison(comparison);
   assertLinkComparison(comparison);
   assertSourceComparison(comparison);
 }
@@ -591,6 +600,25 @@ function validComparisonScalars(comparison: WikiRebuildComparison): boolean {
 function assertClaimComparison(comparison: WikiRebuildComparison): void {
   assertClaimList(comparison.missingClaims);
   assertClaimList(comparison.addedClaims);
+}
+
+function assertSectionComparison(comparison: WikiRebuildComparison): void {
+  assertStringList(comparison.baselineSections, 100, "Wiki rebuild baseline sections", true);
+  assertStringList(comparison.candidateSections, 100, "Wiki rebuild candidate sections", true);
+  assertStringList(comparison.missingSections, 100, "Wiki rebuild missing sections", true);
+  assertStringList(comparison.addedSections, 100, "Wiki rebuild added sections", true);
+  assertListDifference(
+    comparison.baselineSections,
+    comparison.candidateSections,
+    comparison.missingSections,
+    "missing sections",
+  );
+  assertListDifference(
+    comparison.candidateSections,
+    comparison.baselineSections,
+    comparison.addedSections,
+    "added sections",
+  );
 }
 
 function assertLinkComparison(comparison: WikiRebuildComparison): void {

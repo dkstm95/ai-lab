@@ -37,6 +37,8 @@ interface ApplyOptions {
   readonly reviewer?: string;
 }
 
+interface RebuildApplyOptions extends ApplyOptions, ProposeOptions {}
+
 interface RunnerOptions {
   readonly acceptRunnerDigest?: string;
   readonly acceptTaskDigest?: string;
@@ -78,7 +80,7 @@ export function registerWikiCommands(cli: CAC, root?: string): void {
     .option("--task <file>", "Task artifact filename")
     .option("--result <file>", "AI result artifact filename")
     .option("--reviewer <name>", "Human reviewer identity")
-    .option("--accept-digest <digest>", "Full reviewed proposal digest")
+    .option("--accept-digest <digest>", "Full reviewed proposal or report digest")
     .option("--runner-id <id>", "Explicit external runner id")
     .option("--runner-executable <path>", "Absolute external runner executable")
     .option("--runner-args-json <json>", "Static argument JSON array, default []")
@@ -114,6 +116,8 @@ async function dispatchWikiCommand(
   if (route === "rebuild compare" && args.length === 2) return rebuildCompareCommand(root, options);
   if (route === "rebuild review" && args.length === 3)
     return rebuildReviewCommand(root, args[2] ?? "");
+  if (route === "rebuild apply" && args.length === 3)
+    return rebuildApplyCommand(root, args[2] ?? "", options);
   throw new Error(`Unknown wiki command: wiki ${args.join(" ")}`);
 }
 
@@ -374,6 +378,26 @@ async function writeRebuildReportArtifact(
 async function rebuildReviewCommand(root: string | undefined, name: string): Promise<void> {
   const report = rebuildWorkflow(root).reviewReport(await readArtifact(workspaceRoot(root), name));
   console.log(formatWikiRebuildReview(report));
+}
+
+async function rebuildApplyCommand(
+  root: string | undefined,
+  name: string,
+  options: RebuildApplyOptions,
+): Promise<void> {
+  const [task, result, report] = await Promise.all([
+    readArtifact(workspaceRoot(root), requiredText(options.task, "--task")),
+    readArtifact(workspaceRoot(root), requiredText(options.result, "--result")),
+    readArtifact(workspaceRoot(root), name),
+  ]);
+  const applied = await rebuildWorkflow(root).applyReviewed({
+    task,
+    result,
+    report,
+    acceptedDigest: requiredText(options.acceptDigest, "--accept-digest"),
+    reviewedBy: requiredText(options.reviewer, "--reviewer"),
+  });
+  console.log(JSON.stringify(applied, null, 2));
 }
 
 function workflow(root?: string): WikiAnswerWorkflow {
@@ -642,7 +666,7 @@ export function formatWikiProposalReview(proposal: WikiProposal): string {
 
 export function formatWikiRebuildReview(report: WikiRebuildReport): string {
   return [
-    "Review this exact shadow rebuild report. It cannot be applied by this workflow.",
+    "Review this exact shadow rebuild report before applying its bound task and result.",
     "Terminal control and direction characters are escaped.",
     safeJson(report),
     `Digest: ${report.digest}`,
