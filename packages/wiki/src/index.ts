@@ -12,6 +12,21 @@ import {
   parseWikiAnswerTask,
 } from "./answer-exchange.js";
 import {
+  type WikiMemoryContext,
+  type WikiMemoryEvaluationRecord,
+  type WikiMemoryEvaluationSummary,
+  type WikiMemoryMatch,
+  buildWikiMemoryContext,
+  buildWikiMemoryEvaluationRecord,
+  parseWikiMemoryContext,
+  parseWikiMemoryEvaluationInput,
+  parseWikiMemoryEvaluationRecord,
+  selectWikiMemories,
+  summarizeWikiMemoryEvaluationRecords,
+  wikiMemoryInstruction,
+  wikiMemoryReference,
+} from "./memory.js";
+import {
   type WikiRebuildDocumentClaim,
   documentClaims,
   renderWikiRebuildDocument,
@@ -86,6 +101,30 @@ export type {
   WikiAnswerTaskContext,
   WikiAnswerTaskEvidence,
 } from "./answer-exchange.js";
+export {
+  parseWikiMemoryContext,
+  parseWikiMemoryEvaluationInput,
+  parseWikiMemoryEvaluationRecord,
+  wikiMemoryContextSchemaVersion,
+  wikiMemoryEvaluationSchemaVersion,
+  wikiMemoryInstruction,
+  wikiMemoryKinds,
+} from "./memory.js";
+export type {
+  WikiMemoryAssessmentInput,
+  WikiMemoryContext,
+  WikiMemoryEvaluationAssessment,
+  WikiMemoryEvaluationCounts,
+  WikiMemoryEvaluationInput,
+  WikiMemoryEvaluationRecord,
+  WikiMemoryEvaluationSummary,
+  WikiMemoryKind,
+  WikiMemoryMatch,
+  WikiMemoryPageEvaluationSummary,
+  WikiMemoryReference,
+  WikiMemoryTaskOutcome,
+  WikiMemoryVerdict,
+} from "./memory.js";
 export {
   parseWikiRebuildReport,
   parseWikiRebuildResult,
@@ -438,6 +477,32 @@ export async function prepareWikiQuery(
   );
 }
 
+export async function prepareWikiMemoryContext(
+  workspace: Workspace,
+  query: string,
+  now: Date = new Date(),
+): Promise<WikiMemoryContext> {
+  const snapshot = { query, now: new Date(now.getTime()) };
+  return withWikiWriteLock(workspace, (locked) =>
+    prepareWikiMemoryContextLocked(locked, snapshot.query, snapshot.now),
+  );
+}
+
+export async function validateCurrentWikiMemoryContext(
+  workspace: Workspace,
+  value: unknown,
+  now: Date = new Date(),
+): Promise<WikiMemoryContext> {
+  const context = parseWikiMemoryContext(value);
+  return withWikiWriteLock(workspace, async (locked) => {
+    const memories = await wikiMemoryMatches(locked, context.query, new Date(now.getTime()));
+    if (JSON.stringify(memories) !== JSON.stringify(context.memories)) {
+      throw new Error("Wiki memory context is stale");
+    }
+    return context;
+  });
+}
+
 export async function prepareWikiEvolve(workspace: Workspace): Promise<WikiTaskPacket> {
   const [pages, report, runs] = await Promise.all([
     listWikiPages(workspace),
@@ -602,18 +667,33 @@ async function prepareWikiAnswerTaskLocked(
   input: PrepareWikiAnswerTaskInput,
 ): Promise<WikiAnswerTask> {
   await assertInitializedWiki(workspace);
-  const packet = await prepareWikiQuery(workspace, input.question);
-  const evidence = await answerTaskEvidence(workspace, input.sourceIds);
-  const contexts = await readWikiContextFiles(workspace, [
-    ...packet.contextFiles,
-    ...evidence.map((source) => source.path),
+  const [packet, evidence, memories] = await Promise.all([
+    prepareWikiQuery(workspace, input.question),
+    answerTaskEvidence(workspace, input.sourceIds),
+    wikiMemoryMatches(workspace, input.question, new Date()),
   ]);
   return buildWikiAnswerTask({
     ...input,
-    instructions: [packet.prompt, ...packet.constraints],
-    contexts,
+    instructions: answerTaskInstructions(packet, memories),
+    contexts: await readWikiContextFiles(workspace, [
+      ...packet.contextFiles,
+      ...memories.map(({ path }) => path),
+      ...evidence.map((source) => source.path),
+    ]),
     evidence,
+    memories: memories.map(wikiMemoryReference),
   });
+}
+
+function answerTaskInstructions(
+  packet: WikiTaskPacket,
+  memories: readonly WikiMemoryMatch[],
+): string[] {
+  return [
+    packet.prompt,
+    ...packet.constraints,
+    ...(memories.length === 0 ? [] : [wikiMemoryInstruction]),
+  ];
 }
 
 export async function prepareWikiAnswerProposal(
@@ -692,6 +772,36 @@ export async function recordWikiRun(
   const snapshot = { input: structuredClone(input), now: new Date(now.getTime()) };
   return withWikiWriteLock(workspace, (locked) =>
     recordWikiRunUnlocked(locked, snapshot.input, snapshot.now),
+  );
+}
+
+export async function recordWikiMemoryEvaluation(
+  workspace: Workspace,
+  taskValue: unknown,
+  inputValue: unknown,
+  now: Date = new Date(),
+): Promise<WikiMemoryEvaluationRecord> {
+  const task = parseWikiAnswerTask(taskValue);
+  const evaluation = parseWikiMemoryEvaluationInput(inputValue);
+  if (task.memories.length === 0) {
+    throw new Error("Wiki answer task selected no memories to evaluate");
+  }
+  const record = buildWikiMemoryEvaluationRecord({
+    taskId: task.id,
+    taskDigest: task.digest,
+    query: task.question,
+    memories: task.memories,
+    evaluation,
+    recordedAt: new Date(now.getTime()).toISOString(),
+  });
+  return withWikiWriteLock(workspace, (locked) => recordWikiMemoryEvaluationLocked(locked, record));
+}
+
+export async function summarizeWikiMemoryEvaluations(
+  workspace: Workspace,
+): Promise<WikiMemoryEvaluationSummary> {
+  return withWikiWriteLock(workspace, async (locked) =>
+    summarizeWikiMemoryEvaluationRecords(await wikiMemoryEvaluationRecords(locked)),
   );
 }
 
@@ -1561,10 +1671,51 @@ function evolveConstraints(): string[] {
   ];
 }
 
+async function prepareWikiMemoryContextLocked(
+  workspace: Workspace,
+  query: string,
+  now: Date,
+): Promise<WikiMemoryContext> {
+  await assertInitializedWiki(workspace);
+  return buildWikiMemoryContext({
+    query,
+    preparedAt: now.toISOString(),
+    memories: await wikiMemoryMatches(workspace, query, now),
+  });
+}
+
+async function wikiMemoryMatches(
+  workspace: Workspace,
+  query: string,
+  now: Date,
+): Promise<WikiMemoryMatch[]> {
+  const pages = await listWikiPages(workspace);
+  return selectWikiMemories(
+    pages.map((page) => {
+      const candidate = {
+        path: relativeWikiPath(workspace, page.path),
+        title: page.metadata.title,
+        slug: page.metadata.slug,
+        kind: page.metadata.kind,
+        status: page.metadata.status,
+        content: page.content,
+      };
+      return page.metadata.reviewAfter === undefined
+        ? candidate
+        : { ...candidate, reviewAfter: page.metadata.reviewAfter };
+    }),
+    query,
+    now,
+  );
+}
+
 async function selectQueryPages(workspace: Workspace, question: string): Promise<WikiPage[]> {
   const pages = await listWikiPages(workspace);
   const tokens = queryTokens(question);
-  return pages.filter((page) => pageMatches(page, tokens)).slice(0, 5);
+  return pages
+    .filter((page) => !["playbook", "failure", "decision"].includes(page.metadata.kind))
+    .filter((page) => pageMatches(page, tokens))
+    .slice(0, 5);
 }
 
 function queryTokens(question: string): string[] {
@@ -1902,6 +2053,7 @@ function wikiDirectories(workspace: Workspace): string[] {
   return [
     wikiPath(workspace, "raw", "sources"),
     wikiPath(workspace, "raw", "runs"),
+    wikiPath(workspace, "raw", "evals"),
     ...pageDirs.map((dir) => wikiPath(workspace, "pages", dir)),
   ];
 }
@@ -1921,6 +2073,7 @@ function wikiLayoutExpectations(allowMissing: boolean): WikiPathExpectation[] {
       "raw",
       "raw/sources",
       "raw/runs",
+      "raw/evals",
       "pages",
       ...pageDirs.map((dir) => `pages/${dir}`),
     ].map((path) => ({ path, type: "directory" as const, allowMissing })),
@@ -2129,6 +2282,44 @@ async function recordWikiRunUnlocked(
     `## [${now.toISOString()}] run | ${auditValue(input.task)} | ${id}`,
   );
   return { id, path, recordedAt: now.toISOString() };
+}
+
+async function recordWikiMemoryEvaluationLocked(
+  workspace: Workspace,
+  record: WikiMemoryEvaluationRecord,
+): Promise<WikiMemoryEvaluationRecord> {
+  await initWikiUnlocked(workspace);
+  await promoteManagedWikiFile(
+    workspace,
+    {
+      path: `raw/evals/${record.id}.json`,
+      content: `${JSON.stringify(record, null, 2)}\n`,
+    },
+    `## [${record.recordedAt}] memory-evaluation | ${record.id}`,
+  );
+  return record;
+}
+
+async function wikiMemoryEvaluationRecords(
+  workspace: Workspace,
+): Promise<WikiMemoryEvaluationRecord[]> {
+  await assertWikiPath(workspace, { path: "raw/evals", type: "directory", allowMissing: false });
+  const names = (await readdir(wikiPath(workspace, "raw", "evals")))
+    .filter((name) => name.endsWith(".json"))
+    .sort();
+  const contexts = await readWikiContextFiles(
+    workspace,
+    names.map((name) => `raw/evals/${name}`),
+  );
+  return contexts.map((context) => parseMemoryEvaluationJson(context.path, context.content));
+}
+
+function parseMemoryEvaluationJson(path: string, content: string): WikiMemoryEvaluationRecord {
+  try {
+    return parseWikiMemoryEvaluationRecord(JSON.parse(content));
+  } catch {
+    throw new Error(`Wiki memory evaluation artifact is invalid: ${path}`);
+  }
 }
 
 async function promoteManagedWikiFile(
@@ -2895,6 +3086,7 @@ function schemaLayerRules(): string {
   return [
     "## Layers",
     "- raw sources are immutable evidence under `raw/sources/`.",
+    "- raw memory evaluations are local observations under `raw/evals/`.",
     "- wiki pages are compiled markdown knowledge under `pages/`.",
     "- `index.md` is the content map and must be updated with page changes.",
     "- `log.md` is chronological, append-only, and written only by the wiki package.",
@@ -2927,6 +3119,8 @@ function schemaWorkflowRules(): string {
     "Manual or automated agents read lint issues, recent runs, and candidate pages, then prepare small source-backed candidate updates. Evolve approval and promotion are not implemented yet.",
     "## Reflect",
     "Prepare a task from one explicit run or summary, feedback, validation, and changed files. Return a typed failure, playbook, decision, or skip result. The package renders and lints candidate Markdown. Promote it only after review of the exact report digest.",
+    "## Memory",
+    "Retrieve at most three relevant active playbook, failure, or decision pages whose review date has not expired. Treat them as guidance, not factual evidence. The current request, explicit instructions, and source evidence take precedence. Bind selected paths, content hashes, scores, and matched terms to answer tasks. Store explicit post-task usefulness observations under `raw/evals/`; they do not prove causal improvement.",
     "## Lint",
     "Check broken links, orphan concept/entity/synthesis pages, stale TODOs, unsupported sources, conflicted or review pages, duplicate slugs, duplicate accepted claims, stale active pages, and index drift.",
   ].join("\n\n");

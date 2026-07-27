@@ -6,6 +6,7 @@ The LLM agent prepares source-backed knowledge and evidence-bound reflections. A
 
 ## Layers
 - raw sources are immutable evidence under `raw/sources/`.
+- raw memory evaluations are local observations under `raw/evals/`.
 - wiki pages are compiled markdown knowledge under `pages/`.
 - `index.md` is the content map and must be updated with page changes.
 - `log.md` is chronological, append-only, and written only by the wiki package.
@@ -42,6 +43,10 @@ Manual or automated agents read lint issues, recent runs, and candidate pages, t
 ## Reflect
 
 Prepare a task from one explicit run or summary, feedback, validation, and changed files. Return a typed failure, playbook, decision, or skip result. The package renders and lints candidate Markdown. Promote it only after review of the exact report digest.
+
+## Memory
+
+Retrieve at most three relevant active playbook, failure, or decision pages whose review date has not expired. Treat them as guidance, not factual evidence. The current request, explicit instructions, and source evidence take precedence. Bind selected paths, content hashes, scores, and matched terms to answer tasks. Store explicit post-task usefulness observations under `raw/evals/`; they do not prove causal improvement.
 
 ## Lint
 

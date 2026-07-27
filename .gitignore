@@ -19,6 +19,9 @@ runs/
 !wiki/raw/runs/
 wiki/raw/runs/*
 !wiki/raw/runs/.gitkeep
+!wiki/raw/evals/
+wiki/raw/evals/*
+!wiki/raw/evals/.gitkeep
 .idea/
 *.iml
 .DS_Store

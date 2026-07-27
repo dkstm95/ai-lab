@@ -7,10 +7,12 @@ import {
   prepareWikiAnswerTask,
   prepareWikiEvolve,
   prepareWikiIngest,
+  prepareWikiMemoryContext,
   prepareWikiQuery,
   prepareWikiReflectionReport,
   prepareWikiReflectionTask,
   recordWikiRun,
+  summarizeWikiMemoryEvaluations,
 } from "@ai-lab/wiki";
 import type { Workspace } from "@ai-lab/workspace";
 
@@ -101,6 +103,34 @@ export class PrepareWikiQueryTool implements LocalTool {
   async execute(call: ToolCall): Promise<ToolResult> {
     const packet = await prepareWikiQuery(this.workspace, requiredInput(call, "question"));
     return { name: this.definition.name, output: packet };
+  }
+}
+
+export class PrepareWikiMemoryContextTool implements LocalTool {
+  readonly definition = {
+    name: "wiki.memory.retrieve",
+    description: "Retrieves at most three active, relevant, reviewed Wiki memory pages.",
+  };
+
+  constructor(private readonly workspace: Workspace) {}
+
+  async execute(call: ToolCall): Promise<ToolResult> {
+    const context = await prepareWikiMemoryContext(this.workspace, requiredInput(call, "query"));
+    return { name: this.definition.name, output: context };
+  }
+}
+
+export class SummarizeWikiMemoryEvaluationsTool implements LocalTool {
+  readonly definition = {
+    name: "wiki.memory.stats",
+    description: "Returns aggregate usefulness observations for retrieved Wiki memories.",
+  };
+
+  constructor(private readonly workspace: Workspace) {}
+
+  async execute(_call: ToolCall): Promise<ToolResult> {
+    const summary = await summarizeWikiMemoryEvaluations(this.workspace);
+    return { name: this.definition.name, output: summary };
   }
 }
 
@@ -208,6 +238,8 @@ export function createWikiTools(workspace: Workspace): LocalTool[] {
     new LintWikiTool(workspace),
     new PrepareWikiIngestTool(workspace),
     new PrepareWikiQueryTool(workspace),
+    new PrepareWikiMemoryContextTool(workspace),
+    new SummarizeWikiMemoryEvaluationsTool(workspace),
     new PrepareWikiEvolveTool(workspace),
     new RecordWikiRunTool(workspace),
     new ProposeWikiAnswerTool(workspace),

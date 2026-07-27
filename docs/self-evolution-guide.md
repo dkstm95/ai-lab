@@ -126,3 +126,10 @@ frontmatter. `propose` previews full-Wiki lint without changing live files. `app
 exact reviewed report digest, rechecks task context and candidate state, promotes the page and
 index atomically, and appends the audit log. A `skip` report records that no durable lesson exists
 and cannot be applied.
+
+## Retrieval and Evaluation
+
+Answer tasks automatically inject at most three relevant active memory pages. Selection, stale
+hash checks, local usefulness observations, CLI commands, and interpretation limits are defined in
+[`wiki-memory.md`](wiki-memory.md). These observations guide later review; they do not prove that a
+memory caused an answer to improve.

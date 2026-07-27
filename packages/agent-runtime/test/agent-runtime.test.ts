@@ -4,13 +4,20 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { EchoTool } from "@ai-lab/local-tools";
 import { FakeModelProvider, ModelRouter, externalRunnerFileSha256 } from "@ai-lab/model-providers";
-import { addWikiSource, initWiki, prepareWikiQuery, recordWikiRun } from "@ai-lab/wiki";
+import {
+  addWikiSource,
+  initWiki,
+  prepareWikiQuery,
+  recordWikiRun,
+  renderWikiPage,
+} from "@ai-lab/wiki";
 import { createWorkspace } from "@ai-lab/workspace";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   DefaultAgentRuntime,
   type ExternalRunnerConfig,
   WikiAnswerWorkflow,
+  WikiMemoryWorkflow,
   WikiReflectionWorkflow,
   createDefaultAgentRuntime,
 } from "../src/index.js";
@@ -129,6 +136,41 @@ describe("agent runtime", () => {
     ).resolves.toContain("## Prevention Check");
   });
 
+  it("retrieves reviewed memory and records a task-bound usefulness observation", async () => {
+    const workspace = await wikiWorkspace();
+    await writeMemoryPage(workspace.root);
+    const source = await addWikiSource(workspace, { path: "source.md", title: "Research" });
+    const memory = new WikiMemoryWorkflow(workspace);
+    const context = await memory.prepareContext("durable knowledge", now());
+    const task = await new WikiAnswerWorkflow(workspace).prepareTask({
+      question: "What is durable knowledge?",
+      sourceIds: [source.id],
+    });
+
+    expect(context.memories.map(({ path }) => path)).toEqual([
+      "pages/playbooks/durable-knowledge-review.md",
+    ]);
+    await expect(memory.validateContext(context, now())).resolves.toEqual(context);
+    expect(task.memories.map(({ path }) => path)).toEqual([
+      "pages/playbooks/durable-knowledge-review.md",
+    ]);
+    const selected = task.memories[0];
+    if (selected === undefined) throw new Error("Expected a selected memory");
+    await memory.recordEvaluation(
+      task,
+      {
+        taskOutcome: "improved",
+        assessments: [{ path: selected.path, verdict: "helpful" }],
+      },
+      now(),
+    );
+    await expect(memory.summarizeEvaluations()).resolves.toMatchObject({
+      evaluations: 1,
+      helpfulRate: 1,
+      counts: { improved: 1, helpful: 1 },
+    });
+  });
+
   it("returns a task-bound result without changing the live Wiki", async () => {
     const workspace = await wikiWorkspace();
     const workflow = new WikiAnswerWorkflow(workspace);
@@ -222,6 +264,26 @@ function answerResult(task: { id: string; digest: string; question: string }, so
     summary: "Durable knowledge remains reusable.",
     acceptedClaims: [{ text: "Durable knowledge remains reusable.", sourceId }],
   };
+}
+
+async function writeMemoryPage(root: string): Promise<void> {
+  await writeFile(
+    join(root, "wiki", "pages", "playbooks", "durable-knowledge-review.md"),
+    renderWikiPage(
+      {
+        title: "Durable Knowledge Review",
+        slug: "durable-knowledge-review",
+        kind: "playbook",
+        status: "active",
+        createdAt: "2026-06-17T12:00:00.000Z",
+        updatedAt: "2026-06-17T12:00:00.000Z",
+        reviewAfter: "2027-06-17T12:00:00.000Z",
+        sources: [],
+      },
+      "## Summary\n\nReview durable knowledge before reuse.\n\n## Links\n\n",
+    ),
+    "utf8",
+  );
 }
 
 function questionPath(root: string): string {

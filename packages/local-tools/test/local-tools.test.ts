@@ -12,11 +12,13 @@ import {
   PrepareWikiAnswerTaskTool,
   PrepareWikiEvolveTool,
   PrepareWikiIngestTool,
+  PrepareWikiMemoryContextTool,
   PrepareWikiQueryTool,
   PrepareWikiReflectionTool,
   ProposeWikiAnswerTool,
   ProposeWikiReflectionTool,
   RecordWikiRunTool,
+  SummarizeWikiMemoryEvaluationsTool,
   createWorkspaceTools,
 } from "../src/index.js";
 
@@ -55,6 +57,8 @@ describe("local tools", () => {
       "wiki.lint",
       "wiki.ingest.prepare",
       "wiki.query.prepare",
+      "wiki.memory.retrieve",
+      "wiki.memory.stats",
       "wiki.evolve.prepare",
       "wiki.run.record",
       "wiki.answer.propose",
@@ -80,6 +84,14 @@ describe("local tools", () => {
     const query = await new PrepareWikiQueryTool(workspace).execute({
       name: "wiki.query.prepare",
       input: { question: "LLM Wiki" },
+    });
+    const memory = await new PrepareWikiMemoryContextTool(workspace).execute({
+      name: "wiki.memory.retrieve",
+      input: { query: "LLM Wiki" },
+    });
+    const memoryStats = await new SummarizeWikiMemoryEvaluationsTool(workspace).execute({
+      name: "wiki.memory.stats",
+      input: {},
     });
     const evolve = await new PrepareWikiEvolveTool(workspace).execute({
       name: "wiki.evolve.prepare",
@@ -124,6 +136,8 @@ describe("local tools", () => {
 
     expect((ingest.output as { task: string }).task).toBe("ingest");
     expect((query.output as { task: string }).task).toBe("query");
+    expect((memory.output as { memories: unknown[] }).memories).toEqual([]);
+    expect((memoryStats.output as { evaluations: number }).evaluations).toBe(0);
     expect((evolve.output as { task: string }).task).toBe("evolve");
     expect((lint.output as { issues: unknown[] }).issues).toEqual([]);
     expect((answer.output as { diagnostics: { issues: unknown[] } }).diagnostics.issues).toEqual(

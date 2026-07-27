@@ -8,6 +8,7 @@ import {
   type WikiAnswerRunnerResult,
   type WikiAnswerTask,
   WikiAnswerWorkflow,
+  WikiMemoryWorkflow,
   type WikiProposal,
   type WikiRebuildReport,
   WikiRebuildWorkflow,
@@ -116,7 +117,7 @@ async function dispatchWikiCommand(
     return answerReviewCommand(root, args[2] ?? "");
   if (route === "answer apply" && args.length === 3)
     return answerApplyCommand(root, args[2] ?? "", options);
-  if (route.startsWith("rebuild ") || route.startsWith("reflect "))
+  if (route.startsWith("rebuild ") || route.startsWith("reflect ") || route.startsWith("memory "))
     return dispatchWikiMaintenanceCommand(root, args, options);
   throw new Error(`Unknown wiki command: wiki ${args.join(" ")}`);
 }
@@ -141,6 +142,19 @@ async function dispatchWikiMaintenanceCommand(
     return reflectionReviewCommand(root, args[2] ?? "");
   if (route === "reflect apply" && args.length === 3)
     return reflectionApplyCommand(root, args[2] ?? "", options);
+  return dispatchWikiMemoryCommand(root, args, options);
+}
+
+async function dispatchWikiMemoryCommand(
+  root: string | undefined,
+  args: readonly string[],
+  options: WikiCommandOptions,
+): Promise<void> {
+  const route = args.slice(0, 2).join(" ");
+  if (route === "memory retrieve" && args.length === 3)
+    return memoryRetrieveCommand(root, args[2] ?? "", options);
+  if (route === "memory evaluate" && args.length === 2) return memoryEvaluateCommand(root, options);
+  if (route === "memory stats" && args.length === 2) return memoryStatsCommand(root);
   throw new Error(`Unknown wiki command: wiki ${args.join(" ")}`);
 }
 
@@ -495,6 +509,53 @@ async function reflectionApplyCommand(
   console.log(JSON.stringify(applied, null, 2));
 }
 
+async function memoryRetrieveCommand(
+  root: string | undefined,
+  query: string,
+  options: TaskOptions,
+): Promise<void> {
+  const context = await memoryWorkflow(root).prepareContext(query);
+  if (options.out === undefined) {
+    console.log(JSON.stringify(context, null, 2));
+    return;
+  }
+  const artifact = await writeArtifact(workspaceRoot(root), options.out, context);
+  console.log(JSON.stringify(memoryContextSummary(context, artifact), null, 2));
+}
+
+function memoryContextSummary(
+  context: Awaited<ReturnType<WikiMemoryWorkflow["prepareContext"]>>,
+  artifact: string,
+) {
+  return {
+    artifact,
+    id: context.id,
+    digest: context.digest,
+    memories: context.memories.map(({ path, kind, score, matchedTerms }) => ({
+      path,
+      kind,
+      score,
+      matchedTerms,
+    })),
+  };
+}
+
+async function memoryEvaluateCommand(
+  root: string | undefined,
+  options: WikiCommandOptions,
+): Promise<void> {
+  const [task, input] = await Promise.all([
+    readArtifact(workspaceRoot(root), requiredText(options.task, "--task")),
+    readArtifact(workspaceRoot(root), requiredText(options.input, "--input")),
+  ]);
+  const record = await memoryWorkflow(root).recordEvaluation(task, input);
+  console.log(JSON.stringify({ id: record.id, digest: record.digest }, null, 2));
+}
+
+async function memoryStatsCommand(root?: string): Promise<void> {
+  console.log(JSON.stringify(await memoryWorkflow(root).summarizeEvaluations(), null, 2));
+}
+
 function workflow(root?: string): WikiAnswerWorkflow {
   return new WikiAnswerWorkflow(
     root === undefined ? createDefaultWorkspace() : createWorkspace(root),
@@ -509,6 +570,12 @@ function rebuildWorkflow(root?: string): WikiRebuildWorkflow {
 
 function reflectionWorkflow(root?: string): WikiReflectionWorkflow {
   return new WikiReflectionWorkflow(
+    root === undefined ? createDefaultWorkspace() : createWorkspace(root),
+  );
+}
+
+function memoryWorkflow(root?: string): WikiMemoryWorkflow {
+  return new WikiMemoryWorkflow(
     root === undefined ? createDefaultWorkspace() : createWorkspace(root),
   );
 }
