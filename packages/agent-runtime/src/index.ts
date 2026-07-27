@@ -9,6 +9,7 @@ import type { AgentRunRequest, AgentRunResult, ToolResult } from "@ai-lab/protoc
 
 export { WikiAnswerWorkflow } from "./wiki-workflow.js";
 export { WikiRebuildWorkflow } from "./wiki-rebuild-workflow.js";
+export { WikiReflectionWorkflow } from "./wiki-reflection-workflow.js";
 export type {
   ApplyReviewedWikiProposalInput,
   WikiAnswerRunnerOptions,
@@ -29,6 +30,7 @@ export type {
   WikiRebuildApplyResult,
   WikiRebuildResult,
   WikiRebuildTask,
+  WikiReflectionTask,
 } from "@ai-lab/wiki";
 
 export interface AgentRuntime {

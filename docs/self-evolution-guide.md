@@ -78,21 +78,48 @@ run task
   -> retrieve relevant memory on the next task
 ```
 
-## First Implementation Unit
+## Reflection Preparation
 
-Start with `wiki.reflect.prepare`.
+`wiki.reflect.prepare` is the implemented first unit of the reflection flow. It prepares a
+provider-neutral task artifact and does not invoke a model or modify the live Wiki.
 
 Inputs:
 
-- recent run id or run summary
+- exactly one recent run id or run summary
 - user feedback
 - validation result
 - changed files
 
 Output:
 
-- a reflection task packet
+- a digest-bound task packet containing the selected evidence and current `schema.md` and `index.md`
 - expected files under `pages/failures`, `pages/playbooks`, or `pages/decisions`
-- constraints for redaction, source-backed claims, and no direct `AGENTS.md` edits
+- constraints for redaction, evidence-grounded observations, and no direct `AGENTS.md` edits
 
-Later additions can add memory proposal helpers, approval queues, and stronger retrieval.
+The recorded-run form snapshots the selected `wiki/raw/runs/*.json` file and binds its hash. The
+summary form does not fabricate a raw run. Both forms preserve feedback, validation, and changed
+file names in the task digest, so another AI platform receives the same reviewed input.
+
+Create a private input artifact under `.ai-lab/wiki-exchange`, then prepare the task:
+
+```json
+{
+  "runId": "2026-07-27T00-00-00-000Z-review-12345678",
+  "feedback": "Keep the memory scope requested by the user.",
+  "validation": "The response answered a different question.",
+  "changedFiles": ["packages/wiki/src/index.ts"]
+}
+```
+
+```bash
+pnpm cli wiki reflect prepare \
+  --input reflection-input.json \
+  --out reflection-task.json
+```
+
+Use `runSummary` instead of `runId` when no raw run was retained. The exchange directory and
+artifacts are private local files. Inspect the task before giving it to Codex or another platform
+because a recorded-run task contains the selected raw run snapshot.
+
+Reflection result validation, candidate lint, approval, and promotion remain separate later units.
+Until they exist, the task explicitly forbids writing the live Wiki.

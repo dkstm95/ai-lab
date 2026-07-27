@@ -32,6 +32,15 @@ import {
   wikiRebuildReportSchemaVersion,
 } from "./rebuild-exchange.js";
 import {
+  type PrepareWikiReflectionTaskInput,
+  type WikiReflectionEvidence,
+  type WikiReflectionTask,
+  buildWikiReflectionTask,
+  parseWikiReflectionTask,
+  parseWikiReflectionTaskInput,
+  reflectionExpectedFiles,
+} from "./reflection-exchange.js";
+import {
   WikiCandidateValidationError,
   type WikiPathExpectation,
   WikiSourceReferenceError,
@@ -89,6 +98,17 @@ export type {
   WikiRebuildDocumentResultPage,
   WikiRebuildDocumentSection,
 } from "./rebuild-document.js";
+export {
+  parseWikiReflectionTask,
+  parseWikiReflectionTaskInput,
+  wikiReflectionTaskSchemaVersion,
+} from "./reflection-exchange.js";
+export type {
+  PrepareWikiReflectionTaskInput,
+  WikiReflectionEvidence,
+  WikiReflectionTask,
+  WikiReflectionTaskContext,
+} from "./reflection-exchange.js";
 
 export {
   WikiCandidateValidationError,
@@ -371,6 +391,39 @@ export async function prepareWikiEvolve(workspace: Workspace): Promise<WikiTaskP
     recentRunFiles(workspace),
   ]);
   return validatedTaskPacket(workspace, evolvePacket(workspace, pages, report, runs));
+}
+
+export async function prepareWikiReflectionTask(
+  workspace: Workspace,
+  inputValue: unknown,
+): Promise<WikiReflectionTask> {
+  const input = parseWikiReflectionTaskInput(inputValue);
+  const contexts = await readWikiContextFiles(workspace, reflectionContextFiles(input));
+  const evidence = reflectionEvidence(input, contexts);
+  return buildWikiReflectionTask({
+    evidence,
+    feedback: input.feedback,
+    validation: input.validation,
+    changedFiles: input.changedFiles,
+    contexts,
+    expectedFiles: reflectionExpectedFiles(),
+    constraints: reflectionConstraints(),
+  });
+}
+
+export async function validateCurrentWikiReflectionTask(
+  workspace: Workspace,
+  taskValue: unknown,
+): Promise<WikiReflectionTask> {
+  const task = parseWikiReflectionTask(taskValue);
+  const contexts = await readWikiContextFiles(
+    workspace,
+    task.contexts.map(({ path }) => path),
+  );
+  if (JSON.stringify(contexts) !== JSON.stringify(task.contexts)) {
+    throw new Error("Wiki reflection task contexts changed after preparation");
+  }
+  return task;
 }
 
 export async function prepareWikiRebuildTask(
@@ -1443,6 +1496,41 @@ async function recentRunFiles(workspace: Workspace): Promise<string[]> {
     paths.map((path) => assertWikiPath(workspace, { path, type: "file", allowMissing: false })),
   );
   return paths;
+}
+
+function reflectionContextFiles(input: PrepareWikiReflectionTaskInput): string[] {
+  return input.runId === undefined
+    ? ["schema.md", "index.md"]
+    : ["schema.md", "index.md", `raw/runs/${input.runId}.json`];
+}
+
+function reflectionEvidence(
+  input: PrepareWikiReflectionTaskInput,
+  contexts: readonly { path: string; sha256: string }[],
+): WikiReflectionEvidence {
+  if (input.runId === undefined) {
+    return { kind: "provided-summary", summary: input.runSummary };
+  }
+  const path = `raw/runs/${input.runId}.json`;
+  const context = contexts.find((candidate) => candidate.path === path);
+  if (context === undefined) {
+    throw new Error(`Wiki reflection run not found: ${input.runId}`);
+  }
+  return { kind: "recorded-run", id: input.runId, path, sha256: context.sha256 };
+}
+
+function reflectionConstraints(): string[] {
+  return [
+    ...writingConstraints(),
+    "Redact secrets, tokens, environment values, private data, and long command output.",
+    "Do not copy a transcript or raw run details into durable memory.",
+    "Ground observed events in the supplied run, feedback, and validation.",
+    "Keep inferred causes, hypotheses, and generalizations separate from observed facts.",
+    "Do not cite raw/runs as a durable public source or add it to page frontmatter.",
+    "Do not modify raw/sources, raw/runs, AGENTS.md, SOUL.md, docs, index.md, or log.md.",
+    "Prepare no more than one coherent failure, playbook, or decision candidate.",
+    "Do not write the live wiki; a later proposal and human approval must promote it.",
+  ];
 }
 
 function evolvePageFiles(

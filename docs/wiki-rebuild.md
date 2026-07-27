@@ -128,9 +128,13 @@ The 2026-07-27 migration rehearsal used three independent managed source sets:
 Every baseline and candidate lint report was clean. Shadow operations did not change target pages
 or `index.md`.
 
+`memory-candidate-scope-mismatch` remains an approved legacy reflection. Its originating raw run
+was not retained, so rebuilding it from its own text would create circular evidence. New
+reflections must start from a digest-bound reflection task instead.
+
 ## Limitations
 
-- Version 3 does not rebuild failure, decision, or other source-free reflection pages.
+- Version 3 excludes source-free reflection pages; use the separate reflection flow.
 - Source and concept pages use a canonical evidence layout; syntheses use typed document blocks.
 - Older artifacts are rejected; regenerate them to bind the current semantic contract.
 - It does not execute a model itself or expose `rebuild run`.

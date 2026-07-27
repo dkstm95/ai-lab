@@ -8,6 +8,7 @@ import {
   prepareWikiEvolve,
   prepareWikiIngest,
   prepareWikiQuery,
+  prepareWikiReflectionTask,
   recordWikiRun,
 } from "@ai-lab/wiki";
 import type { Workspace } from "@ai-lab/workspace";
@@ -113,6 +114,21 @@ export class PrepareWikiEvolveTool implements LocalTool {
   async execute(_call: ToolCall): Promise<ToolResult> {
     const packet = await prepareWikiEvolve(this.workspace);
     return { name: this.definition.name, output: packet };
+  }
+}
+
+export class PrepareWikiReflectionTool implements LocalTool {
+  readonly definition = {
+    name: "wiki.reflect.prepare",
+    description:
+      "Creates a portable reflection task from an explicitly selected local run or summary.",
+  };
+
+  constructor(private readonly workspace: Workspace) {}
+
+  async execute(call: ToolCall): Promise<ToolResult> {
+    const task = await prepareWikiReflectionTask(this.workspace, call.input);
+    return { name: this.definition.name, output: task };
   }
 }
 

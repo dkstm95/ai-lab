@@ -32,6 +32,8 @@ import {
   parseWikiRebuildResult,
   parseWikiRebuildResultForTask,
   parseWikiRebuildTask,
+  parseWikiReflectionTask,
+  parseWikiReflectionTaskInput,
   prepareWikiAnswerProposal,
   prepareWikiAnswerProposalFromTask,
   prepareWikiAnswerTask,
@@ -40,13 +42,16 @@ import {
   prepareWikiQuery,
   prepareWikiRebuildReport,
   prepareWikiRebuildTask,
+  prepareWikiReflectionTask,
   readWikiPage,
   recordWikiRun,
   renderWikiPage,
   validateCurrentWikiAnswerTask,
   validateCurrentWikiRebuildTask,
+  validateCurrentWikiReflectionTask,
 } from "../src/index.js";
 import { buildWikiRebuildReport, buildWikiRebuildTask } from "../src/rebuild-exchange.js";
+import { buildWikiReflectionTask } from "../src/reflection-exchange.js";
 import { promoteWikiFiles } from "../src/transaction.js";
 
 const roots: string[] = [];
@@ -416,6 +421,173 @@ describe("wiki", () => {
     await symlink(outside, join(workspace.root, "wiki", "raw", "runs"));
 
     await expect(prepareWikiEvolve(workspace)).rejects.toThrow("symbolic link");
+  });
+
+  it("prepares a portable reflection task bound to an explicit local run", async () => {
+    const workspace = await tempWorkspace();
+    const run = await recordWikiRun(
+      workspace,
+      {
+        task: "review",
+        input: "The user corrected the memory scope.",
+        output: "The response proposed a project process instead.",
+      },
+      now(),
+    );
+
+    const task = await prepareWikiReflectionTask(workspace, {
+      runId: run.id,
+      feedback: "Keep the requested personal-memory scope.",
+      validation: "The proposed process lesson answered a different question.",
+      changedFiles: ["packages/wiki/src/index.ts", "docs/self-evolution-guide.md"],
+    });
+
+    expect(task.id).toBe(`wiki-reflection-${task.digest}`);
+    expect(task.evidence).toMatchObject({ kind: "recorded-run", id: run.id });
+    expect(task.contexts.map(({ path }) => path)).toEqual([
+      "index.md",
+      `raw/runs/${run.id}.json`,
+      "schema.md",
+    ]);
+    expect(task.prompt).toContain("untrusted evidence");
+    expect(task.prompt).toContain(
+      "Proposal validation, approval, and promotion are not implemented",
+    );
+    expect(task.expectedFiles).toEqual([
+      "pages/decisions/*.md",
+      "pages/failures/*.md",
+      "pages/playbooks/*.md",
+    ]);
+    expect(task.constraints).toContain(
+      "Do not cite raw/runs as a durable public source or add it to page frontmatter.",
+    );
+    if (task.evidence.kind !== "recorded-run") throw new Error("Expected recorded run");
+    expect(() =>
+      parseWikiReflectionTask({
+        ...task,
+        contexts: [...task.contexts].reverse(),
+      }),
+    ).toThrow("canonical form");
+    expect(() =>
+      parseWikiReflectionTask({
+        ...task,
+        feedback: "Changed after digest.",
+      }),
+    ).toThrow("digest or prompt");
+    expect(() => parseWikiReflectionTask({ ...task, schemaVersion: "wrong" })).toThrow(
+      "invalid scalar fields",
+    );
+    expect(() => parseWikiReflectionTask({ ...task, prompt: undefined })).toThrow(
+      "invalid scalar fields",
+    );
+    expect(() =>
+      parseWikiReflectionTask({
+        ...task,
+        evidence: { kind: "unknown", summary: "Summary." },
+      }),
+    ).toThrow("summary evidence is invalid");
+    expect(() =>
+      parseWikiReflectionTask({
+        ...task,
+        contexts: [task.contexts[0], task.contexts[0]],
+      }),
+    ).toThrow("unique paths");
+    expect(() =>
+      parseWikiReflectionTask({
+        ...task,
+        contexts: [{ ...task.contexts[0], sha256: "0".repeat(64) }, ...task.contexts.slice(1)],
+      }),
+    ).toThrow("context is invalid");
+    expect(() =>
+      buildWikiReflectionTask({
+        evidence: task.evidence,
+        feedback: task.feedback,
+        validation: task.validation,
+        changedFiles: task.changedFiles,
+        contexts: task.contexts.filter(({ path }) => path !== "schema.md"),
+        expectedFiles: task.expectedFiles,
+        constraints: task.constraints,
+      }),
+    ).toThrow("must bind schema.md and index.md");
+    expect(() =>
+      buildWikiReflectionTask({
+        evidence: { ...task.evidence, sha256: "0".repeat(64) },
+        feedback: task.feedback,
+        validation: task.validation,
+        changedFiles: task.changedFiles,
+        contexts: task.contexts,
+        expectedFiles: task.expectedFiles,
+        constraints: task.constraints,
+      }),
+    ).toThrow("does not bind its recorded run");
+    await expect(validateCurrentWikiReflectionTask(workspace, task)).resolves.toEqual(task);
+  });
+
+  it("supports a supplied reflection summary without fabricating a raw run", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+
+    const task = await prepareWikiReflectionTask(workspace, {
+      runSummary: "A concise local summary with no retained transcript.",
+      feedback: "Preserve the requested scope.",
+      validation: "The correction is repeatable.",
+      changedFiles: [],
+    });
+
+    expect(task.evidence).toEqual({
+      kind: "provided-summary",
+      summary: "A concise local summary with no retained transcript.",
+    });
+    expect(task.contexts.map(({ path }) => path)).toEqual(["index.md", "schema.md"]);
+  });
+
+  it("rejects ambiguous, missing, unsafe, and stale reflection evidence", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    const input = {
+      feedback: "Correction.",
+      validation: "Validation.",
+      changedFiles: [],
+    };
+
+    await expect(prepareWikiReflectionTask(workspace, input)).rejects.toThrow(
+      "exactly one of runId or runSummary",
+    );
+    await expect(
+      prepareWikiReflectionTask(workspace, { ...input, runId: "run", runSummary: "Summary." }),
+    ).rejects.toThrow("exactly one of runId or runSummary");
+    expect(() => parseWikiReflectionTaskInput(null)).toThrow("must be an object");
+    expect(() =>
+      parseWikiReflectionTaskInput({
+        ...input,
+        runSummary: "Summary.",
+        unexpected: true,
+      }),
+    ).toThrow("unknown or missing fields");
+    await expect(
+      prepareWikiReflectionTask(workspace, { ...input, runId: "../outside" }),
+    ).rejects.toThrow("run id is invalid");
+    await expect(
+      prepareWikiReflectionTask(workspace, { ...input, runId: "missing" }),
+    ).rejects.toThrow();
+    await expect(
+      prepareWikiReflectionTask(workspace, {
+        ...input,
+        runSummary: "Summary.",
+        changedFiles: ["../outside"],
+      }),
+    ).rejects.toThrow("changed file path is invalid");
+
+    const run = await recordWikiRun(
+      workspace,
+      { task: "review", input: "input", output: "output" },
+      now(),
+    );
+    const task = await prepareWikiReflectionTask(workspace, { ...input, runId: run.id });
+    await writeFile(run.path, '{"changed":true}\n', "utf8");
+    await expect(validateCurrentWikiReflectionTask(workspace, task)).rejects.toThrow(
+      "contexts changed",
+    );
   });
 
   it("prepares deterministic provider-neutral answer tasks", async () => {

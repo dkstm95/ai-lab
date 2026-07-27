@@ -13,6 +13,7 @@ import {
   PrepareWikiEvolveTool,
   PrepareWikiIngestTool,
   PrepareWikiQueryTool,
+  PrepareWikiReflectionTool,
   ProposeWikiAnswerTool,
   RecordWikiRunTool,
   createWorkspaceTools,
@@ -148,5 +149,30 @@ describe("local tools", () => {
         },
       }),
     ).rejects.toThrow("wiki.answer.propose requires task");
+  });
+
+  it("exposes reflection preparation only through an explicitly selected trusted tool", async () => {
+    const workspace = await tempWorkspace();
+    await new InitWikiTool(workspace).execute({ name: "wiki.init", input: {} });
+    const run = await new RecordWikiRunTool(workspace).execute({
+      name: "wiki.run.record",
+      input: { task: "review", input: "correction", output: "validated" },
+    });
+    const runId = String((run.output as { id: string }).id);
+
+    const task = await new PrepareWikiReflectionTool(workspace).execute({
+      name: "wiki.reflect.prepare",
+      input: {
+        runId,
+        feedback: "Remember this correction.",
+        validation: "It is reusable.",
+        changedFiles: [],
+      },
+    });
+
+    expect((task.output as { evidence: { id: string } }).evidence.id).toBe(runId);
+    expect(createWorkspaceTools(workspace).map((tool) => tool.definition.name)).not.toContain(
+      "wiki.reflect.prepare",
+    );
   });
 });

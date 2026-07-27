@@ -11,6 +11,7 @@ import {
   type WikiProposal,
   type WikiRebuildReport,
   WikiRebuildWorkflow,
+  WikiReflectionWorkflow,
   externalRunnerFileSha256,
 } from "@ai-lab/agent-runtime";
 import { createDefaultWorkspace, createWorkspace } from "@ai-lab/workspace";
@@ -21,6 +22,7 @@ interface SourceOptions {
 }
 
 interface TaskOptions {
+  readonly input?: string;
   readonly out?: string;
   readonly sources?: string;
   readonly title?: string;
@@ -76,6 +78,7 @@ export function registerWikiCommands(cli: CAC, root?: string): void {
     .command("wiki [...args]", "Manage the local provider-neutral LLM Wiki")
     .option("--title <title>", "Human-readable source or page title")
     .option("--sources <ids>", "Comma-separated registered source ids")
+    .option("--input <file>", "Private input artifact filename")
     .option("--out <file>", "Artifact filename under .ai-lab/wiki-exchange")
     .option("--task <file>", "Task artifact filename")
     .option("--result <file>", "AI result artifact filename")
@@ -112,12 +115,25 @@ async function dispatchWikiCommand(
     return answerReviewCommand(root, args[2] ?? "");
   if (route === "answer apply" && args.length === 3)
     return answerApplyCommand(root, args[2] ?? "", options);
+  if (route.startsWith("rebuild ") || route.startsWith("reflect "))
+    return dispatchWikiMaintenanceCommand(root, args, options);
+  throw new Error(`Unknown wiki command: wiki ${args.join(" ")}`);
+}
+
+async function dispatchWikiMaintenanceCommand(
+  root: string | undefined,
+  args: readonly string[],
+  options: WikiCommandOptions,
+): Promise<void> {
+  const route = args.slice(0, 2).join(" ");
   if (route === "rebuild task" && args.length === 2) return rebuildTaskCommand(root, options);
   if (route === "rebuild compare" && args.length === 2) return rebuildCompareCommand(root, options);
   if (route === "rebuild review" && args.length === 3)
     return rebuildReviewCommand(root, args[2] ?? "");
   if (route === "rebuild apply" && args.length === 3)
     return rebuildApplyCommand(root, args[2] ?? "", options);
+  if (route === "reflect prepare" && args.length === 2)
+    return reflectionPrepareCommand(root, options);
   throw new Error(`Unknown wiki command: wiki ${args.join(" ")}`);
 }
 
@@ -400,6 +416,34 @@ async function rebuildApplyCommand(
   console.log(JSON.stringify(applied, null, 2));
 }
 
+async function reflectionPrepareCommand(
+  root: string | undefined,
+  options: TaskOptions,
+): Promise<void> {
+  const task = await reflectionWorkflow(root).prepareTask(
+    await readArtifact(workspaceRoot(root), requiredText(options.input, "--input")),
+  );
+  const artifact = await writeArtifact(
+    workspaceRoot(root),
+    requiredText(options.out, "--out"),
+    task,
+  );
+  console.log(JSON.stringify(reflectionTaskSummary(task, artifact), null, 2));
+}
+
+function reflectionTaskSummary(
+  task: Awaited<ReturnType<WikiReflectionWorkflow["prepareTask"]>>,
+  artifact: string,
+) {
+  return {
+    artifact,
+    id: task.id,
+    digest: task.digest,
+    evidence: task.evidence.kind,
+    contexts: task.contexts.map(({ path }) => path),
+  };
+}
+
 function workflow(root?: string): WikiAnswerWorkflow {
   return new WikiAnswerWorkflow(
     root === undefined ? createDefaultWorkspace() : createWorkspace(root),
@@ -408,6 +452,12 @@ function workflow(root?: string): WikiAnswerWorkflow {
 
 function rebuildWorkflow(root?: string): WikiRebuildWorkflow {
   return new WikiRebuildWorkflow(
+    root === undefined ? createDefaultWorkspace() : createWorkspace(root),
+  );
+}
+
+function reflectionWorkflow(root?: string): WikiReflectionWorkflow {
+  return new WikiReflectionWorkflow(
     root === undefined ? createDefaultWorkspace() : createWorkspace(root),
   );
 }

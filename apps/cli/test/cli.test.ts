@@ -12,6 +12,7 @@ import type {
   WikiRebuildReport,
   WikiRebuildResult,
   WikiRebuildTask,
+  WikiReflectionTask,
 } from "@ai-lab/agent-runtime";
 import { externalRunnerFileSha256 } from "@ai-lab/agent-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -156,6 +157,47 @@ describe("cli", () => {
     );
     await expect(readFile(join(root, "wiki", "log.md"), "utf8")).resolves.toContain(
       `digest=${proposal.digest}`,
+    );
+  });
+
+  it("prepares a private provider-neutral reflection artifact from explicit input", async () => {
+    const root = await tempRoot();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    await runCli(["node", "ai-lab", "wiki", "init"], root);
+    const exchange = join(root, ".ai-lab", "wiki-exchange");
+    await mkdir(exchange, { recursive: true, mode: 0o700 });
+    await writeFile(
+      join(exchange, "reflection-input.json"),
+      `${JSON.stringify({
+        runSummary: "The response answered a different memory scope.",
+        feedback: "Keep the scope the user requested.",
+        validation: "The mismatch is observable and repeatable.",
+        changedFiles: ["docs/self-evolution-guide.md"],
+      })}\n`,
+      { encoding: "utf8", mode: 0o600 },
+    );
+
+    await runCli(
+      [
+        "node",
+        "ai-lab",
+        "wiki",
+        "reflect",
+        "prepare",
+        "--input",
+        "reflection-input.json",
+        "--out",
+        "reflection-task.json",
+      ],
+      root,
+    );
+    const task = await artifact<WikiReflectionTask>(root, "reflection-task.json");
+
+    expect(task.id).toBe(`wiki-reflection-${task.digest}`);
+    expect(task.evidence.kind).toBe("provided-summary");
+    expect(task.contexts.map(({ path }) => path)).toEqual(["index.md", "schema.md"]);
+    expect(loggedJson<{ artifact: string }>(log).artifact).toBe(
+      ".ai-lab/wiki-exchange/reflection-task.json",
     );
   });
 
