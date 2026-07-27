@@ -38,20 +38,15 @@ The agent records work, reflects on useful lessons, proposes durable memory, and
 
 LLM Wiki pages are not only prompt context. Users may ask about previously saved knowledge directly, so durable pages should be useful as concise human-facing notes.
 
-The writing rules below adapt George Orwell's six rules in [Politics and the English Language](https://www.orwellfoundation.com/the-orwell-foundation/orwell/essays-and-other-works/politics-and-the-english-language/).
+Use Hope `write` as the SSOT for common writing rules. The rules below are specific to durable LLM Wiki pages.
 
 - Prefer clear titles and summaries before detailed claims.
-- Avoid stale metaphors, similes, idioms, and stock phrases.
-- Prefer short, familiar words when they express the same meaning.
-- Remove every word that does not add meaning.
-- Prefer active voice when it makes the actor and action clearer.
-- Replace foreign phrases, scientific terms, and jargon with everyday language when possible. Explain terms needed for precision.
-- Treat these as judgment rules, not rigid formulas. Break one when following it would make the writing inaccurate, unclear, or unnatural.
-- Keep one main idea per sentence. Split any sentence that is hard to understand in one pass.
 - Keep source-backed claims explicit enough to answer follow-up questions.
 - Split dense source notes into reusable concept, synthesis, or playbook pages.
 - Avoid storing only agent-oriented diagnostics when a human would need the lesson later.
 - Keep raw run details local, but make approved shared memory readable without the raw transcript.
+
+Provider-neutral Wiki tasks use the fallback writing constraints in `packages/wiki/src/index.ts` when Hope is unavailable.
 
 ## Completion Loop
 

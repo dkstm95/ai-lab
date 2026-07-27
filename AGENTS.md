@@ -10,6 +10,7 @@
 ## 작업별 참조
 
 - 프로젝트 목적, 빠른 실행, CLI/service 사용법: `README.md`, `README.ko.md`
+- 문서, Wiki, README 등 사람이 읽는 글의 작성, 수정, 검토: `$hope:write`
 - monorepo 구조, 패키지 책임, 의존 방향, provider 방식: `docs/system-design.md`
 - 설치, 실행, 검증, Git hook 기준: `docs/development-guide.md`
 - 테스트 작성과 리뷰 기준: `docs/testing-guide.md`
@@ -20,6 +21,10 @@
 - 개인 맥락 기억 prototype의 목표, 비목표, 저장/검색/평가 기준: `docs/subbrain-design.md`
 - LLM Wiki 저장 구조, page schema, lint 규칙: `packages/wiki/src/index.ts`
 - 기존 Wiki page의 비파괴 재생성·비교: `docs/wiki-rebuild.md`
+
+공통 글쓰기 원칙의 SSOT는 Hope의 `write` 기능이다. 이 저장소에는 출처,
+claim 상태, 승인 흐름처럼 ai-lab에만 필요한 규칙을 둔다. Hope를 쓸 수 없는
+provider-neutral Wiki 작업은 `packages/wiki/src/index.ts`의 fallback 제약을 따른다.
 
 ## 우선순위
 
