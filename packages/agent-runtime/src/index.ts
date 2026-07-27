@@ -7,6 +7,10 @@ import {
 } from "@ai-lab/model-providers";
 import type { AgentRunRequest, AgentRunResult, ToolResult } from "@ai-lab/protocol";
 
+export { WikiAnswerWorkflow } from "./wiki-workflow.js";
+export type { ApplyReviewedWikiProposalInput } from "./wiki-workflow.js";
+export type { WikiAnswerResult, WikiAnswerTask, WikiProposal } from "@ai-lab/wiki";
+
 export interface AgentRuntime {
   run(request: AgentRunRequest): Promise<AgentRunResult>;
 }

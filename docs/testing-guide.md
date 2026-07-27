@@ -7,12 +7,12 @@ Tests protect package contracts and runnable lab flows. They must not call real 
 - `protocol`: schema acceptance and rejection.
 - `config`: default config and provider profile selection without secrets.
 - `model-providers`: deterministic fake provider and task routing.
-- `agent-runtime`: model and tool orchestration.
+- `agent-runtime`: model/tool orchestration and trusted provider-neutral Wiki workflow composition.
 - `workspace`: workspace creation and slug behavior.
-- `wiki`: markdown wiki layout, source registration, page metadata parsing, and lint findings.
+- `wiki`: markdown layout, source registration, strict task/result binding, proposal safety, promotion, metadata, and lint.
 - `subbrain`: SQLite memory storage, deterministic retrieval, context packets, replaceable provider ports, and fixture evaluation.
 - `local-tools`: tool input handling, workspace integration, and wiki tool contracts.
-- `apps/cli`: command behavior through package APIs.
+- `apps/cli`: manual exchange artifacts, review output, explicit digest approval, and command behavior.
 - `apps/service`: HTTP status and JSON contracts.
 
 Avoid duplicate coverage. A rule should be tested at the package that owns it, while adapters test only command or HTTP contracts.
@@ -20,6 +20,11 @@ Avoid duplicate coverage. A rule should be tested at the package that owns it, w
 ## Provider Tests
 
 The default suite uses `FakeModelProvider`. Real API provider tests and external runner tests must be opt-in and kept outside `pnpm test` unless they are fully mocked.
+
+Wiki workflow tests use generated task/result fixtures only. They verify that provider-neutral task
+creation and proposal preparation leave the live Wiki unchanged, stale or forged artifacts fail,
+source IDs remain bound to selected evidence, and only an exact human-approved digest is promoted.
+CLI tests must not open a browser, call an API, or invoke a subscription tool.
 
 ## Coverage
 

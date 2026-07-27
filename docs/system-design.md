@@ -27,12 +27,12 @@ docs/
 - `packages/protocol`: Zod schemas, shared interfaces, and request/result types. It must not depend on internal packages, vendor SDKs, MCP SDKs, Hono, or Node runtime implementation modules.
 - `packages/config`: environment, workspace root, provider profile, and model routing config. It depends on `protocol`.
 - `packages/model-providers`: provider adapters and routing. It supports API, external runner, manual, and fake provider kinds. The initial implementation uses only deterministic fake providers.
-- `packages/agent-runtime`: agent execution flow. It calls model providers and local tools, then returns normalized run results. It does not know CLI, HTTP, MCP, or provider transport details.
+- `packages/agent-runtime`: agent execution flow and trusted application workflows. It calls model providers and local tools, returns normalized run results, and composes the provider-neutral Wiki answer flow for human-facing adapters. It does not know CLI, HTTP, MCP, or provider transport details.
 - `packages/workspace`: local workspace behavior such as root selection, slug creation, and path-oriented helpers.
-- `packages/wiki`: local markdown LLM Wiki behavior such as wiki layout, workspace-local source registration, ingest/query/evolve packets, digest-bound answer proposals, explicit claim/source pairs, approval and stale-hash gates, candidate validation, rollback-capable file promotion, package-owned audit logs, page metadata, and deterministic linting. The agent-safe tool factory in `packages/local-tools` may prepare proposals but receives neither source-import nor apply capability; it is not wired into the default runtime yet. Trusted integrations own source selection and reviewer authentication before calling those package APIs. The package does not call model providers, own the agent loop, or expose human-facing CLI flows.
+- `packages/wiki`: local markdown LLM Wiki behavior such as wiki layout, source registration, portable task/result schemas, digest-bound answer proposals, explicit claim/source pairs, approval and stale-hash gates, candidate validation, rollback-capable promotion, audit logs, metadata, and deterministic linting. Trusted integrations own source selection and reviewer authentication. The package has no provider, process, network, agent-loop, or CLI knowledge.
 - `packages/subbrain`: portable personal context memory prototype. It owns raw manual entries, event-level memories, the store interface, deterministic retrieval scoring, context packets, replaceable extraction/linking/query/answer ports, fixtures, and evaluation helpers. Its SQLite implementation is exposed from a separate subpath. It must not depend on apps, wiki, model providers, or agent runtime.
-- `packages/local-tools`: tools callable by the agent runtime, such as echo and wiki tools. It does not own the agent loop.
-- `apps/cli`: human terminal entrypoint.
+- `packages/local-tools`: tools callable by the agent runtime, such as echo and Wiki packet/proposal tools. Its default agent-safe Wiki set cannot import sources, export source-bearing tasks, or apply proposals.
+- `apps/cli`: human terminal entrypoint. It owns private exchange artifacts, exact proposal review rendering, and explicit digest acceptance.
 - `apps/service`: local Hono HTTP entrypoint.
 
 These packages are intentionally small but not temporary. They represent stable ownership boundaries for AI lab work. Do not add a new package until a responsibility is shared by at least two flows or cannot fit the existing boundary without coupling unrelated concerns.
@@ -41,7 +41,7 @@ These packages are intentionally small but not temporary. They represent stable 
 
 ```text
 apps/* -> agent-runtime, workspace, protocol, subbrain
-agent-runtime -> protocol, model-providers, local-tools
+agent-runtime -> protocol, model-providers, local-tools, wiki, workspace
 local-tools -> protocol, workspace, wiki
 wiki -> workspace
 subbrain -> no internal deps
@@ -67,13 +67,14 @@ Model providers must not be assumed to be API-only.
 
 - `api`: OpenAI, Anthropic, Gemini, Kimi, local API-compatible servers.
 - `external-runner`: official CLI or local runner integrations such as Codex, Claude Code, or OpenCode.
-- `manual`: generate a prompt/package for a user to run elsewhere and import the result.
+- `manual`: export a self-contained task for a user to run anywhere, then import a strict result. The Wiki CLI implements this without treating a paused human workflow as a synchronous model provider.
 - `fake`: deterministic provider used by tests and smoke commands.
 
 The default test suite uses fake providers only. Subscription-based tools must not be invoked through browser automation or unofficial bypasses.
 
 ## Later Additions
 
+- Add a trusted stdin/stdout external-runner adapter that uses the same task/result artifacts. Keep executable configuration outside model output, use no shell, and never auto-apply.
 - Extend `packages/wiki` with bidirectional links, retrieval, reflection task packets, and approved self-evolution memory pages as behavior becomes concrete.
 - Extend `packages/subbrain` with embedding search, graph traversal, and relationship context after the deterministic baseline passes.
 - Add `packages/mcp` when agent runtime, local tools, or workspace capabilities need to be exposed to external agents.

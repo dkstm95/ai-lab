@@ -1,11 +1,12 @@
 import { createDefaultAgentRuntime } from "@ai-lab/agent-runtime";
 import { type CAC, cac } from "cac";
+import { registerWikiCommands } from "./wiki.js";
 
 export async function runCli(argv: string[], root?: string): Promise<void> {
   const cli = cac("ai-lab");
-  void root;
 
   registerRunCommand(cli);
+  registerWikiCommands(cli, root);
   cli.help();
   cli.parse(normalizeArgv(argv), { run: false });
   await cli.runMatchedCommand();

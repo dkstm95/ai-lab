@@ -3,7 +3,6 @@ import { defineConfig } from "tsup";
 export default defineConfig({
   entry: ["src/index.ts"],
   format: ["esm"],
-  dts: true,
   noExternal: [
     "@ai-lab/agent-runtime",
     "@ai-lab/workspace",
@@ -11,5 +10,6 @@ export default defineConfig({
     "@ai-lab/model-providers",
     "@ai-lab/local-tools",
     "@ai-lab/config",
+    "@ai-lab/wiki",
   ],
 });

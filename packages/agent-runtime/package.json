@@ -10,13 +10,15 @@
     }
   },
   "scripts": {
-    "build": "tsup src/index.ts --format esm --dts",
+    "build": "tsup src/index.ts --format esm && tsc -p tsconfig.json --emitDeclarationOnly",
     "test": "vitest run test",
     "typecheck": "tsc -b"
   },
   "dependencies": {
     "@ai-lab/local-tools": "workspace:*",
     "@ai-lab/model-providers": "workspace:*",
-    "@ai-lab/protocol": "workspace:*"
+    "@ai-lab/protocol": "workspace:*",
+    "@ai-lab/wiki": "workspace:*",
+    "@ai-lab/workspace": "workspace:*"
   }
 }

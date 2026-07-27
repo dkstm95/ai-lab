@@ -18,6 +18,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
+import { TextDecoder } from "node:util";
 import type { Workspace } from "@ai-lab/workspace";
 
 export interface WikiTransactionFile {
@@ -45,6 +46,12 @@ export interface WikiSourceFile {
 export interface WikiWorkspaceSource {
   readonly content: Buffer;
   readonly mode: number;
+}
+
+export interface WikiContextSnapshot {
+  readonly path: string;
+  readonly sha256: string;
+  readonly content: string;
 }
 
 export interface WikiPathExpectation {
@@ -177,6 +184,21 @@ export async function resolveWikiSource(
   return { path, hash: sha256(await readFile(path)) };
 }
 
+export async function readWikiContextFiles(
+  workspace: Workspace,
+  paths: readonly string[],
+): Promise<WikiContextSnapshot[]> {
+  const snapshots: WikiContextSnapshot[] = [];
+  let bytes = 0;
+  for (const path of [...new Set(paths)].sort()) {
+    const snapshot = await readWikiContextFile(workspace, path);
+    bytes += Buffer.byteLength(snapshot.content);
+    assertWikiContextSize(bytes);
+    snapshots.push(snapshot);
+  }
+  return snapshots;
+}
+
 export async function assertWikiPath(
   workspace: Workspace,
   expectation: WikiPathExpectation,
@@ -253,6 +275,51 @@ async function assertWorkspaceImportPath(
     opened.ino !== current.ino
   ) {
     throw new Error("Wiki source must be a regular file inside the workspace root");
+  }
+}
+
+async function readWikiContextFile(
+  workspace: Workspace,
+  relativePath: string,
+): Promise<WikiContextSnapshot> {
+  const root = resolve(workspace.root, "wiki");
+  const path = resolve(root, relativePath);
+  assertCanonicalWikiPath(relativePath);
+  await assertSafeTarget(root, path);
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const info = await handle.stat();
+    await assertOpenedWikiFile(path, info);
+    assertWikiContextSize(info.size);
+    const content = new TextDecoder("utf-8", { fatal: true }).decode(await handle.readFile());
+    return { path: relativePath, content, sha256: sha256(content) };
+  } finally {
+    await handle.close();
+  }
+}
+
+function assertWikiContextSize(bytes: number): void {
+  if (bytes > 1_000_000) {
+    throw new Error("Wiki answer task context exceeds 1000000 bytes");
+  }
+}
+
+function assertCanonicalWikiPath(path: string): void {
+  if (path.includes("\\") || posix.isAbsolute(path) || posix.normalize(path) !== path) {
+    throw new Error(`Wiki context path is invalid: ${path}`);
+  }
+}
+
+async function assertOpenedWikiFile(path: string, opened: Stats): Promise<void> {
+  const current = await lstat(path);
+  if (
+    !opened.isFile() ||
+    current.isSymbolicLink() ||
+    !current.isFile() ||
+    opened.dev !== current.dev ||
+    opened.ino !== current.ino
+  ) {
+    throw new Error(`Wiki context is not a regular file: ${path}`);
   }
 }
 

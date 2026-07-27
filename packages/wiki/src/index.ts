@@ -3,6 +3,15 @@ import { lstat, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promis
 import { extname, join, posix, relative } from "node:path";
 import { type Workspace, slugify } from "@ai-lab/workspace";
 import {
+  type WikiAnswerProposalDraft,
+  type WikiAnswerTask,
+  type WikiAnswerTaskEvidence,
+  answerDraftFromExchange,
+  buildWikiAnswerTask,
+  parseWikiAnswerResult,
+  parseWikiAnswerTask,
+} from "./answer-exchange.js";
+import {
   WikiCandidateValidationError,
   type WikiPathExpectation,
   WikiSourceReferenceError,
@@ -11,11 +20,26 @@ import {
   hashWikiFiles,
   previewWikiFiles,
   promoteWikiFiles,
+  readWikiContextFiles,
   readWorkspaceSource,
   resolveWikiSource,
   sha256,
   withWikiWriteLock,
 } from "./transaction.js";
+
+export {
+  parseWikiAnswerResult,
+  parseWikiAnswerTask,
+  wikiAnswerResultSchemaVersion,
+  wikiAnswerTaskSchemaVersion,
+} from "./answer-exchange.js";
+export type {
+  WikiAnswerResult,
+  WikiAnswerResultClaim,
+  WikiAnswerTask,
+  WikiAnswerTaskContext,
+  WikiAnswerTaskEvidence,
+} from "./answer-exchange.js";
 
 export {
   WikiCandidateValidationError,
@@ -127,6 +151,12 @@ export interface WikiAnswerProposalInput {
   readonly question: string;
   readonly summary: string;
   readonly acceptedClaims: readonly WikiAcceptedClaim[];
+  readonly title?: string;
+}
+
+export interface PrepareWikiAnswerTaskInput {
+  readonly question: string;
+  readonly sourceIds: readonly string[];
   readonly title?: string;
 }
 
@@ -269,6 +299,33 @@ export async function prepareWikiEvolve(workspace: Workspace): Promise<WikiTaskP
   return validatedTaskPacket(workspace, evolvePacket(workspace, pages, report, runs));
 }
 
+export async function prepareWikiAnswerTask(
+  workspace: Workspace,
+  input: PrepareWikiAnswerTaskInput,
+): Promise<WikiAnswerTask> {
+  const snapshot = normalizedAnswerTaskInput(structuredClone(input));
+  return withWikiWriteLock(workspace, (locked) => prepareWikiAnswerTaskLocked(locked, snapshot));
+}
+
+async function prepareWikiAnswerTaskLocked(
+  workspace: Workspace,
+  input: PrepareWikiAnswerTaskInput,
+): Promise<WikiAnswerTask> {
+  await assertInitializedWiki(workspace);
+  const packet = await prepareWikiQuery(workspace, input.question);
+  const evidence = await answerTaskEvidence(workspace, input.sourceIds);
+  const contexts = await readWikiContextFiles(workspace, [
+    ...packet.contextFiles,
+    ...evidence.map((source) => source.path),
+  ]);
+  return buildWikiAnswerTask({
+    ...input,
+    instructions: [packet.prompt, ...packet.constraints],
+    contexts,
+    evidence,
+  });
+}
+
 export async function prepareWikiAnswerProposal(
   workspace: Workspace,
   input: WikiAnswerProposalInput,
@@ -279,6 +336,31 @@ export async function prepareWikiAnswerProposal(
   return withWikiWriteLock(workspace, (locked) =>
     prepareWikiAnswerProposalLocked(locked, snapshot.input, snapshot.now),
   );
+}
+
+export async function prepareWikiAnswerProposalFromTask(
+  workspace: Workspace,
+  taskValue: unknown,
+  resultValue: unknown,
+  now: Date = new Date(),
+): Promise<WikiProposal> {
+  const task = parseWikiAnswerTask(taskValue);
+  const result = parseWikiAnswerResult(resultValue);
+  const input = answerDraftFromExchange(task, result);
+  validateAnswerInput(input);
+  return withWikiWriteLock(workspace, (locked) =>
+    prepareTaskBoundProposal(locked, task, input, new Date(now.getTime())),
+  );
+}
+
+async function prepareTaskBoundProposal(
+  workspace: Workspace,
+  task: WikiAnswerTask,
+  input: WikiAnswerProposalDraft,
+  now: Date,
+): Promise<WikiProposal> {
+  await assertAnswerTaskCurrent(workspace, task);
+  return prepareWikiAnswerProposalLocked(workspace, input, now);
 }
 
 async function prepareWikiAnswerProposalLocked(
@@ -335,6 +417,87 @@ export function parseWikiPage(content: string, path = ""): WikiPage {
   };
 }
 
+export function parseWikiProposal(value: unknown): WikiProposal {
+  if (!wikiProposalObject(value)) {
+    throw new Error("Wiki proposal artifact is invalid");
+  }
+  const proposal = structuredClone(value);
+  validateWikiProposal(proposal);
+  return proposal;
+}
+
+const wikiProposalKeys = [
+  "id",
+  "digest",
+  "kind",
+  "note",
+  "files",
+  "baseHashes",
+  "sourceHashes",
+  "diagnostics",
+];
+
+function wikiProposalObject(value: unknown): value is WikiProposal {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const proposal = value as Partial<WikiProposal>;
+  return (
+    hasExactKeys(value, wikiProposalKeys) &&
+    proposal.kind === "answer" &&
+    typeof proposal.id === "string" &&
+    typeof proposal.digest === "string" &&
+    typeof proposal.note === "string" &&
+    Array.isArray(proposal.files) &&
+    proposal.files.every(wikiUpdateFileObject) &&
+    recordObject(proposal.baseHashes) &&
+    recordObject(proposal.sourceHashes) &&
+    wikiLintReportObject(proposal.diagnostics)
+  );
+}
+
+function wikiUpdateFileObject(value: unknown): value is WikiUpdateFile {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    hasExactKeys(value, ["path", "content"]) &&
+    "path" in value &&
+    typeof value.path === "string" &&
+    "content" in value &&
+    typeof value.content === "string"
+  );
+}
+
+function wikiLintReportObject(value: unknown): value is WikiLintReport {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    hasExactKeys(value, ["issues"]) &&
+    "issues" in value &&
+    Array.isArray(value.issues) &&
+    value.issues.every(
+      (candidate) =>
+        typeof candidate === "object" &&
+        candidate !== null &&
+        hasExactKeys(candidate, ["code", "path", "message"]) &&
+        "code" in candidate &&
+        typeof candidate.code === "string" &&
+        "path" in candidate &&
+        typeof candidate.path === "string" &&
+        "message" in candidate &&
+        typeof candidate.message === "string",
+    )
+  );
+}
+
+function recordObject(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasExactKeys(value: object, expected: readonly string[]): boolean {
+  return JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...expected].sort());
+}
+
 async function addWikiSourceUnlocked(
   workspace: Workspace,
   input: AddWikiSourceInput,
@@ -343,6 +506,7 @@ async function addWikiSourceUnlocked(
   await initWikiUnlocked(workspace);
   const imported = await readWorkspaceSource(workspace, input.path);
   const source = wikiSource(workspace, input, sourceId(input.title, imported.content), now);
+  await assertNewSourceId(workspace, source.id);
   await promoteManagedWikiFile(
     workspace,
     {
@@ -374,7 +538,7 @@ function sourceName(path: string, id: string): string {
 }
 
 function sourceId(title: string, content: Buffer): string {
-  return `${slugify(title)}-${createHash("sha256").update(content).digest("hex").slice(0, 8)}`;
+  return `${slugify(title)}-${createHash("sha256").update(content).digest("hex").slice(0, 32)}`;
 }
 
 async function findSourcePath(workspace: Workspace, sourceId: string): Promise<string> {
@@ -384,17 +548,86 @@ async function findSourcePath(workspace: Workspace, sourceId: string): Promise<s
     type: "directory",
     allowMissing: false,
   });
-  const names = await readdir(root);
-  const name = names.find((candidate) => sourceFileId(candidate) === sourceId);
-  if (name === undefined) {
+  const names = (await readdir(root))
+    .filter((candidate) => sourceFileId(candidate) === sourceId)
+    .sort();
+  if (names.length === 0) {
     throw new Error(`Wiki source not found: ${sourceId}`);
   }
+  if (names.length > 1) {
+    throw new Error(`Wiki source id is ambiguous: ${sourceId}`);
+  }
+  const name = names[0] ?? "";
   return (await resolveWikiSource(workspace, `raw/sources/${name}`)).path;
+}
+
+async function assertNewSourceId(workspace: Workspace, sourceId: string): Promise<void> {
+  const names = await readdir(wikiPath(workspace, "raw", "sources"));
+  if (names.some((candidate) => sourceFileId(candidate) === sourceId)) {
+    throw new Error(`Wiki source id is already registered: ${sourceId}`);
+  }
 }
 
 function sourceFileId(name: string): string {
   const extension = extname(name);
   return extension.length === 0 ? name : name.slice(0, -extension.length);
+}
+
+function normalizedAnswerTaskInput(input: PrepareWikiAnswerTaskInput): PrepareWikiAnswerTaskInput {
+  if (
+    !Array.isArray(input.sourceIds) ||
+    input.sourceIds.some((sourceId) => typeof sourceId !== "string")
+  ) {
+    throw new Error("Wiki answer task requires a question and at least one valid source id");
+  }
+  const sourceIds = unique(input.sourceIds.map((sourceId) => sourceId.trim())).sort();
+  if (
+    !validTaskQuestion(input.question) ||
+    !validTaskSources(sourceIds) ||
+    !validTitle(input.title)
+  ) {
+    throw new Error("Wiki answer task requires a question and at least one valid source id");
+  }
+  const normalized = { question: input.question.trim(), sourceIds };
+  return input.title === undefined ? normalized : { ...normalized, title: input.title.trim() };
+}
+
+function validTaskQuestion(question: string): boolean {
+  return boundedOneLine(question, 10_000);
+}
+
+function validTaskSources(sourceIds: readonly string[]): boolean {
+  return (
+    sourceIds.length > 0 &&
+    sourceIds.length <= 100 &&
+    sourceIds.every((sourceId) => boundedOneLine(sourceId, 500))
+  );
+}
+
+async function answerTaskEvidence(
+  workspace: Workspace,
+  sourceIds: readonly string[],
+): Promise<WikiAnswerTaskEvidence[]> {
+  const evidence: WikiAnswerTaskEvidence[] = [];
+  for (const id of sourceIds) {
+    const path = await findSourcePath(workspace, id);
+    evidence.push({ id, path: relativeWikiPath(workspace, path) });
+  }
+  return evidence;
+}
+
+async function assertAnswerTaskCurrent(workspace: Workspace, task: WikiAnswerTask): Promise<void> {
+  const input = {
+    question: task.question,
+    sourceIds: task.evidence.map((source) => source.id),
+  };
+  const current = await prepareWikiAnswerTaskLocked(
+    workspace,
+    task.title === undefined ? input : { ...input, title: task.title },
+  );
+  if (current.digest !== task.digest) {
+    throw new Error("Wiki answer task is stale or was not prepared from the current wiki");
+  }
 }
 
 function taskPacket(
@@ -966,7 +1199,12 @@ function sameAcceptedClaim(left: WikiAcceptedClaim, right: WikiAcceptedClaim): b
 }
 
 function validateAcceptedClaim(claim: WikiAcceptedClaim): void {
-  if (claim.text.trim().length === 0 || /[\r\n]/.test(claim.text)) {
+  if (
+    claim.text.trim().length === 0 ||
+    claim.text.length > 10_000 ||
+    /[\r\n]/.test(claim.text) ||
+    unsafeTextControl(claim.text)
+  ) {
     throw new Error("Accepted wiki claims must contain one non-empty line");
   }
   if (claim.source.trim().length === 0 || /[\r\n]/.test(claim.source)) {
@@ -1347,7 +1585,11 @@ function sourceReferences(page: WikiPage): string[] {
 }
 
 function acceptedClaimSources(content: string): string[] {
-  return content.split("\n").flatMap(acceptedClaimSource);
+  return content
+    .split("\n")
+    .flatMap((line, index, lines) =>
+      acceptedClaimText(line) === undefined ? [] : acceptedClaimSource(lines[index + 1] ?? ""),
+    );
 }
 
 function acceptedClaimSource(line: string): string[] {
@@ -1604,21 +1846,68 @@ function schemaWorkflowRules(): string {
 }
 
 function validateAnswerInput(input: WikiAnswerProposalInput): void {
-  if (input.question.trim().length === 0 || /[\r\n]/.test(input.question)) {
+  if (!boundedOneLine(input.question, 10_000)) {
     throw new Error("Wiki answer proposal requires a one-line question");
   }
-  if (input.summary.trim().length === 0) {
+  if (!validAnswerSummary(input.summary)) {
     throw new Error("Wiki answer proposal requires a summary");
   }
   if (input.acceptedClaims.length === 0) {
     throw new Error("Wiki answer proposal requires at least one accepted claim");
   }
-  if (
-    input.title !== undefined &&
-    (input.title.trim().length === 0 || /[\r\n]/.test(input.title))
-  ) {
+  if (!validTitle(input.title)) {
     throw new Error("Wiki answer proposal title must fit on one line");
   }
+}
+
+function validAnswerSummary(summary: string): boolean {
+  return (
+    summary.trim().length > 0 &&
+    Buffer.byteLength(summary) <= 100_000 &&
+    !unsafeTextControl(summary) &&
+    !reservedAnswerSyntax(summary)
+  );
+}
+
+function validTitle(title: string | undefined): boolean {
+  return title === undefined || boundedOneLine(title, 500);
+}
+
+function boundedOneLine(value: string, maximum: number): boolean {
+  return (
+    value.trim().length > 0 &&
+    value.length <= maximum &&
+    !/[\r\n]/.test(value) &&
+    !unsafeTextControl(value)
+  );
+}
+
+function unsafeTextControl(value: string): boolean {
+  return [...value].some((character) => unsafeControlCode(character.charCodeAt(0)));
+}
+
+function unsafeControlCode(code: number): boolean {
+  return (
+    code < 9 ||
+    (code > 10 && code < 13) ||
+    (code > 13 && code < 32) ||
+    (code >= 127 && code <= 159) ||
+    code === 0x061c ||
+    (code >= 0x200e && code <= 0x200f) ||
+    (code >= 0x2028 && code <= 0x202e) ||
+    (code >= 0x2066 && code <= 0x2069)
+  );
+}
+
+function reservedAnswerSyntax(summary: string): boolean {
+  return summary
+    .split(/\r?\n/)
+    .some(
+      (line) =>
+        /^\s*-\s+accepted:/.test(line) ||
+        /^\s*source:/.test(line) ||
+        ["## Question", "## Summary", "## Key Claims", "## Links"].includes(line.trim()),
+    );
 }
 
 function issue(code: string, path: string, message: string): WikiLintIssue {

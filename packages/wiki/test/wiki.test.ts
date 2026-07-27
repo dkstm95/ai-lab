@@ -13,14 +13,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createWorkspace } from "@ai-lab/workspace";
 import { afterEach, describe, expect, it } from "vitest";
+import { buildWikiAnswerTask } from "../src/answer-exchange.js";
 import {
+  type WikiAnswerTask,
   type WikiProposal,
   addWikiSource,
   applyWikiProposal,
   initWiki,
   lintWiki,
+  parseWikiAnswerResult,
+  parseWikiAnswerTask,
   parseWikiPage,
   prepareWikiAnswerProposal,
+  prepareWikiAnswerProposalFromTask,
+  prepareWikiAnswerTask,
   prepareWikiEvolve,
   prepareWikiIngest,
   prepareWikiQuery,
@@ -98,10 +104,21 @@ describe("wiki", () => {
 
     const source = await addWikiSource(workspace, { path: "source.md", title: "LLM Wiki" });
 
-    expect(source.id).toMatch(/^llm-wiki-[a-f0-9]{8}$/);
+    expect(source.id).toMatch(/^llm-wiki-[a-f0-9]{32}$/);
     await expect(readFile(source.path, "utf8")).resolves.toBe("# Source\n");
     await expect(readFile(join(workspace.root, "wiki", "log.md"), "utf8")).resolves.toContain(
       `source | LLM Wiki | ${source.id}`,
+    );
+  });
+
+  it("rejects a duplicate source id across file extensions", async () => {
+    const workspace = await tempWorkspace();
+    await writeFile(join(workspace.root, "source.md"), "# Same source\n", "utf8");
+    await writeFile(join(workspace.root, "source.txt"), "# Same source\n", "utf8");
+    await addWikiSource(workspace, { path: "source.md", title: "Same" });
+
+    await expect(addWikiSource(workspace, { path: "source.txt", title: "Same" })).rejects.toThrow(
+      "already registered",
     );
   });
 
@@ -386,6 +403,149 @@ describe("wiki", () => {
     await symlink(outside, join(workspace.root, "wiki", "raw", "runs"));
 
     await expect(prepareWikiEvolve(workspace)).rejects.toThrow("symbolic link");
+  });
+
+  it("prepares deterministic provider-neutral answer tasks", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    const before = await wikiState(workspace.root);
+
+    const task = await prepareWikiAnswerTask(workspace, answerTaskInput());
+    const repeated = await prepareWikiAnswerTask(workspace, answerTaskInput());
+
+    expect(task).toEqual(repeated);
+    expect(task.id).toBe(`wiki-answer-${task.digest}`);
+    expect(task.evidence).toEqual([
+      { id: "karpathy-llm-wiki", path: "raw/sources/karpathy-llm-wiki.md" },
+    ]);
+    expect(task.contexts.map((context) => context.path)).toContain(
+      "raw/sources/karpathy-llm-wiki.md",
+    );
+    expect(task.contexts.every((context) => !context.path.includes(workspace.root))).toBe(true);
+    expect(task.prompt).toContain("Return exactly one JSON object");
+    expect(task.prompt).toContain('"sourceId":"karpathy-llm-wiki"');
+    await expect(wikiState(workspace.root)).resolves.toEqual(before);
+  });
+
+  it("rejects ambiguous or oversized task evidence", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    await writeFile(
+      join(workspace.root, "wiki", "raw", "sources", "karpathy-llm-wiki.txt"),
+      "# Duplicate id\n",
+    );
+
+    await expect(prepareWikiAnswerTask(workspace, answerTaskInput())).rejects.toThrow("ambiguous");
+    await rm(join(workspace.root, "wiki", "raw", "sources", "karpathy-llm-wiki.txt"));
+    await writeFile(rawSourcePath(workspace.root), "x".repeat(1_000_001));
+    await expect(prepareWikiAnswerTask(workspace, answerTaskInput())).rejects.toThrow(
+      "context exceeds",
+    );
+  });
+
+  it("turns a task-bound result into a proposal without changing the live wiki", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    const task = await prepareWikiAnswerTask(workspace, answerTaskInput());
+    const before = await wikiState(workspace.root);
+
+    const proposal = await prepareWikiAnswerProposalFromTask(
+      workspace,
+      task,
+      answerTaskResult(task),
+      now(),
+    );
+
+    expect(proposal.diagnostics.issues).toEqual([]);
+    expect(proposalPage(proposal).content).toContain("Agents compile durable wiki pages.");
+    expect(proposalPage(proposal).content).toContain("source: raw/sources/karpathy-llm-wiki.md");
+    await expect(wikiState(workspace.root)).resolves.toEqual(before);
+    await expect(stat(questionPath(workspace.root))).rejects.toThrow();
+  });
+
+  it("rejects stale answer tasks without preparing a proposal", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    const task = await prepareWikiAnswerTask(workspace, answerTaskInput());
+    await writeFile(rawSourcePath(workspace.root), "# Changed source\n", "utf8");
+
+    await expect(
+      prepareWikiAnswerProposalFromTask(workspace, task, answerTaskResult(task), now()),
+    ).rejects.toThrow("stale");
+    await expect(stat(questionPath(workspace.root))).rejects.toThrow();
+  });
+
+  it("strictly binds answer results to task evidence", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    const task = await prepareWikiAnswerTask(workspace, answerTaskInput());
+    const result = answerTaskResult(task);
+
+    expect(() => parseWikiAnswerTask({ ...task, extra: true })).toThrow("unknown");
+    expect(() =>
+      parseWikiAnswerTask({
+        ...task,
+        contexts: [{ ...task.contexts[0], content: "tampered" }, ...task.contexts.slice(1)],
+      }),
+    ).toThrow();
+    expect(() => parseWikiAnswerResult({ ...result, extra: true })).toThrow("unknown");
+    await expect(
+      prepareWikiAnswerProposalFromTask(workspace, task, {
+        ...result,
+        taskId: "wiki-answer-wrong",
+      }),
+    ).rejects.toThrow("does not match");
+    await expect(
+      prepareWikiAnswerProposalFromTask(workspace, task, {
+        ...result,
+        acceptedClaims: [{ text: "Claim.", sourceId: "unknown" }],
+      }),
+    ).rejects.toThrow("unknown source id");
+    await expect(
+      prepareWikiAnswerProposalFromTask(workspace, task, {
+        ...result,
+        summary: "Summary.\n\n- accepted: Injected claim.",
+      }),
+    ).rejects.toThrow("requires a summary");
+    await expect(
+      prepareWikiAnswerProposalFromTask(workspace, task, {
+        ...result,
+        summary: "Summary.\n\nsource: raw/sources/unselected.md",
+      }),
+    ).rejects.toThrow("requires a summary");
+    expect(() => parseWikiAnswerResult({ ...result, summary: "x".repeat(100_001) })).toThrow(
+      "invalid",
+    );
+    expect(() => parseWikiAnswerResult({ ...result, summary: "Forged \u202e summary" })).toThrow(
+      "invalid",
+    );
+    await expect(stat(questionPath(workspace.root))).rejects.toThrow();
+  });
+
+  it("rejects a self-consistent task that omits host-selected context", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    const task = await prepareWikiAnswerTask(workspace, answerTaskInput());
+    const source = task.contexts.find((context) => context.path.startsWith("raw/sources/"));
+    if (source === undefined) {
+      throw new Error("Expected a source context");
+    }
+    const forged = buildWikiAnswerTask({
+      question: task.question,
+      instructions: task.instructions,
+      contexts: [source],
+      evidence: task.evidence,
+    });
+
+    await expect(
+      prepareWikiAnswerProposalFromTask(workspace, forged, answerTaskResult(forged), now()),
+    ).rejects.toThrow();
   });
 
   it("prepares deterministic answer proposals without changing the live wiki", async () => {
@@ -964,6 +1124,29 @@ function answerInput() {
   };
 }
 
+function answerTaskInput() {
+  return {
+    question: "How does LLM Wiki work?",
+    sourceIds: ["karpathy-llm-wiki"],
+  };
+}
+
+function answerTaskResult(task: WikiAnswerTask) {
+  return {
+    schemaVersion: "ai-lab.wiki-answer-result.v1" as const,
+    taskId: task.id,
+    taskDigest: task.digest,
+    question: task.question,
+    summary: "Agents compile durable wiki pages from managed sources.",
+    acceptedClaims: [
+      {
+        text: "Agents compile durable wiki pages.",
+        sourceId: "karpathy-llm-wiki",
+      },
+    ],
+  };
+}
+
 function approval(proposal: WikiProposal, reviewedAt = "2026-06-17T12:30:00.000Z") {
   return {
     proposalId: proposal.id,
@@ -1018,7 +1201,7 @@ function now(): Date {
 }
 
 function badBody(): string {
-  return "## Summary\n\n[[ ]]\n\n## Key Claims\n\n- accepted: Missing a source line.\n";
+  return "## Summary\n\n[[ ]]\n\n- accepted: Missing a source line.\n\n## Key Claims\n";
 }
 
 function goodBody(): string {

@@ -7,7 +7,7 @@
     "ai-lab": "./src/index.ts"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && tsc -p tsconfig.json --emitDeclarationOnly",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "test": "vitest run test",

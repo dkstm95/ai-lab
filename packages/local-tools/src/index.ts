@@ -3,7 +3,8 @@ import {
   addWikiSource,
   initWiki,
   lintWiki,
-  prepareWikiAnswerProposal,
+  prepareWikiAnswerProposalFromTask,
+  prepareWikiAnswerTask,
   prepareWikiEvolve,
   prepareWikiIngest,
   prepareWikiQuery,
@@ -129,16 +130,34 @@ export class RecordWikiRunTool implements LocalTool {
   }
 }
 
-export class ProposeWikiAnswerTool implements LocalTool {
+export class PrepareWikiAnswerTaskTool implements LocalTool {
   readonly definition = {
-    name: "wiki.answer.propose",
-    description: "Prepares a source-backed answer proposal without changing the live wiki.",
+    name: "wiki.answer.prepare",
+    description: "Creates a portable, source-bound answer task for an LLM Wiki.",
   };
 
   constructor(private readonly workspace: Workspace) {}
 
   async execute(call: ToolCall): Promise<ToolResult> {
-    const result = await prepareWikiAnswerProposal(this.workspace, wikiAnswerProposalInput(call));
+    const task = await prepareWikiAnswerTask(this.workspace, wikiAnswerTaskInput(call));
+    return { name: this.definition.name, output: task };
+  }
+}
+
+export class ProposeWikiAnswerTool implements LocalTool {
+  readonly definition = {
+    name: "wiki.answer.propose",
+    description: "Prepares a task-bound answer proposal without changing the live wiki.",
+  };
+
+  constructor(private readonly workspace: Workspace) {}
+
+  async execute(call: ToolCall): Promise<ToolResult> {
+    const result = await prepareWikiAnswerProposalFromTask(
+      this.workspace,
+      requiredStructuredInput(call, "task"),
+      requiredStructuredInput(call, "result"),
+    );
     return { name: this.definition.name, output: result };
   }
 }
@@ -167,41 +186,36 @@ function wikiRunInput(call: ToolCall) {
   };
 }
 
-function wikiAnswerProposalInput(call: ToolCall) {
+function wikiAnswerTaskInput(call: ToolCall) {
   const title = optionalInput(call, "title");
   const input = {
     question: requiredInput(call, "question"),
-    summary: requiredInput(call, "summary"),
-    acceptedClaims: acceptedClaimList(call),
+    sourceIds: requiredStringList(call, "sourceIds"),
   };
   return title === undefined ? input : { ...input, title };
 }
 
-function acceptedClaimList(call: ToolCall): { text: string; source: string }[] {
-  const value = call.input.acceptedClaims;
+function requiredStringList(call: ToolCall, key: string): string[] {
+  const value = call.input[key];
   if (!Array.isArray(value) || value.length === 0) {
-    throw new Error(`${call.name} requires acceptedClaims`);
+    throw new Error(`${call.name} requires ${key}`);
   }
-  return value.map((claim) => acceptedClaim(call, claim));
+  return value.map((item) => requiredStringItem(call, key, item));
 }
 
-function acceptedClaim(call: ToolCall, value: unknown): { text: string; source: string } {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${call.name} acceptedClaims require text and source`);
+function requiredStringItem(call: ToolCall, key: string, value: unknown): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`${call.name} requires non-empty ${key}`);
   }
-  const claim = value as Record<string, unknown>;
-  return {
-    text: requiredValue(call, claim, "text"),
-    source: requiredValue(call, claim, "source"),
-  };
+  return value;
 }
 
-function requiredValue(call: ToolCall, value: Record<string, unknown>, key: string): string {
-  const field = value[key];
-  if (typeof field !== "string" || field.trim().length === 0) {
-    throw new Error(`${call.name} acceptedClaims require ${key}`);
+function requiredStructuredInput(call: ToolCall, key: string): object {
+  const value = call.input[key];
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${call.name} requires ${key}`);
   }
-  return field;
+  return value;
 }
 
 function requiredInput(call: ToolCall, key: string): string {

@@ -9,7 +9,9 @@
   "references": [
     { "path": "../protocol" },
     { "path": "../model-providers" },
-    { "path": "../local-tools" }
+    { "path": "../local-tools" },
+    { "path": "../wiki" },
+    { "path": "../workspace" }
   ],
   "exclude": ["dist"]
 }

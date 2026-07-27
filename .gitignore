@@ -9,6 +9,7 @@ coverage/
 .env.*
 !.env.example
 .subbrain/
+.ai-lab/wiki-exchange/
 .ai-lab-wiki.lock
 .wiki-txn-*
 build/

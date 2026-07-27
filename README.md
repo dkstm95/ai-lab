@@ -49,7 +49,34 @@ docs/                    system, development, and testing guides
 
 ## Working With LLM Wiki
 
-LLM Wiki stores managed source copies and human-readable, reusable markdown knowledge. The current implementation provides safe answer-proposal and promotion primitives, not a runnable LLM workflow. Trusted integrations register workspace-local sources. The wiki package's agent-safe tool factory can prepare ingest/query/evolve packets and create answer proposals, but it cannot import sources or promote an answer directly; it is not wired into the default runtime yet. The implemented approval/promotion path currently covers reusable answer proposals only. A trusted caller must attest that a human reviewed the proposal's exact digest; the package validates that attestation but does not authenticate the reviewer. It then checks target and source hashes, validates a full candidate copy, promotes only the reviewed bytes, and appends its own audit entry. Wiki lint also rejects source traversal, directories, and symbolic links. There is no human-facing wiki CLI yet.
+LLM Wiki stores managed source copies and human-readable, reusable markdown knowledge. Its
+portable answer workflow does not call a model API or depend on one AI vendor:
+
+```bash
+pnpm cli wiki init
+pnpm cli wiki source add notes.md --title "Research notes"
+pnpm cli wiki answer task "What should remain reusable?" \
+  --sources <source-id> --out task.json
+
+# Give the prompt in .ai-lab/wiki-exchange/task.json to any AI.
+# Save its JSON response as .ai-lab/wiki-exchange/result.json.
+
+pnpm cli wiki answer propose \
+  --task task.json --result result.json --out proposal.json
+pnpm cli wiki answer review proposal.json
+pnpm cli wiki answer apply proposal.json \
+  --reviewer "<name>" --accept-digest "<full-reviewed-digest>"
+```
+
+The task artifact contains the selected source contents, so inspect it before sharing it with a
+subscription service or another model. The same strict result schema works with web subscriptions,
+local models, or future trusted runner adapters. Task and proposal creation do not change live Wiki
+pages. Apply requires a human-reviewed full digest, then rechecks the current Wiki, source hashes,
+candidate lint, and reviewed bytes before promotion and audit logging.
+
+Trusted integrations own source selection. Agent-safe tools cannot import sources, create outbound
+tasks, or apply proposals. The package rejects traversal, symbolic links, stale tasks, unknown
+evidence IDs, oversized artifacts, and malformed exchange data.
 
 Implement reusable code in `packages/*`, expose human-facing flows from `apps/cli` or `apps/service` only when they are meant for people, and keep provider-specific SDK details inside `packages/model-providers`.
 

@@ -49,7 +49,34 @@ docs/                    설계, 개발, 테스트 가이드
 
 ## LLM Wiki 흐름
 
-LLM Wiki는 관리 영역에 복사한 source와 사람이 읽을 수 있는 재사용 markdown 지식을 저장한다. 현재 구현은 안전한 답변 proposal·승격 기반이며, 실행 가능한 LLM workflow는 아직 아니다. 신뢰된 integration만 workspace 내부 source를 등록한다. Wiki package의 agent-safe tool factory는 ingest/query/evolve task packet 생성과 답변 proposal 준비까지만 할 수 있고 source를 가져오거나 답변을 직접 승격할 수 없다. 아직 기본 runtime에는 연결하지 않았다. 현재 approval/promotion 경로는 재사용 답변 proposal에만 구현돼 있다. 신뢰된 호출자가 사람이 proposal의 정확한 digest를 검토했다고 확인하면, wiki package는 그 확인을 검증하지만 reviewer를 직접 인증하지는 않는다. 이어서 target/source hash와 전체 candidate를 다시 검증하고 검토된 byte만 승격한 뒤 audit log를 직접 append한다. Wiki lint는 source traversal, directory, symbolic link도 거부한다. 사람이 직접 쓰는 wiki CLI는 아직 두지 않는다.
+LLM Wiki는 관리 영역에 복사한 source와 사람이 읽을 수 있는 재사용 markdown 지식을
+저장한다. 답변 흐름은 모델 API를 호출하지 않으며 한 AI 업체에 의존하지 않는다.
+
+```bash
+pnpm cli wiki init
+pnpm cli wiki source add notes.md --title "조사 노트"
+pnpm cli wiki answer task "무엇을 재사용 지식으로 남길까?" \
+  --sources <source-id> --out task.json
+
+# .ai-lab/wiki-exchange/task.json의 prompt를 원하는 AI에 전달한다.
+# AI가 반환한 JSON을 .ai-lab/wiki-exchange/result.json으로 저장한다.
+
+pnpm cli wiki answer propose \
+  --task task.json --result result.json --out proposal.json
+pnpm cli wiki answer review proposal.json
+pnpm cli wiki answer apply proposal.json \
+  --reviewer "<이름>" --accept-digest "<검토한-전체-digest>"
+```
+
+task에는 선택한 source 원문이 들어간다. 구독형 서비스나 다른 모델에 전달하기 전에
+내용을 확인해야 한다. 같은 result 규약을 웹 구독, 로컬 모델, 향후 신뢰된 외부 runner가
+공유한다. task와 proposal 생성은 실제 Wiki page를 바꾸지 않는다. apply는 사람이 검토한
+전체 digest를 요구한다. 이후 현재 Wiki, source hash, candidate lint, 검토한 byte를 다시
+확인하고 승격과 audit 기록을 수행한다.
+
+source 선택은 신뢰된 integration이 소유한다. agent-safe tool은 source를 가져오거나 외부
+전달용 task를 만들거나 proposal을 apply할 수 없다. 경로 이탈, symbolic link, 오래된 task,
+알 수 없는 evidence ID, 과도하게 큰 artifact, 잘못된 교환 데이터는 거부한다.
 
 반복 사용할 코드는 `packages/*`에 둔다. 사람이 직접 실행해야 하는 흐름만 `apps/cli` 또는 `apps/service`에서 노출한다. provider SDK나 외부 runner 세부사항은 `packages/model-providers` 안에 격리한다.
 

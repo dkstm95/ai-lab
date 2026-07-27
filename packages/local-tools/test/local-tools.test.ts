@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { wikiAnswerResultSchemaVersion } from "@ai-lab/wiki";
 import { createWorkspace } from "@ai-lab/workspace";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -8,6 +9,7 @@ import {
   EchoTool,
   InitWikiTool,
   LintWikiTool,
+  PrepareWikiAnswerTaskTool,
   PrepareWikiEvolveTool,
   PrepareWikiIngestTool,
   PrepareWikiQueryTool,
@@ -85,17 +87,35 @@ describe("local tools", () => {
       name: "wiki.run.record",
       input: { task: "answer", input: "q", output: "a" },
     });
+    const task = await new PrepareWikiAnswerTaskTool(workspace).execute({
+      name: "wiki.answer.prepare",
+      input: {
+        question: "How does LLM Wiki work?",
+        sourceIds: [sourceId],
+      },
+    });
+    const answerTask = task.output as {
+      id: string;
+      digest: string;
+      question: string;
+    };
     const answer = await new ProposeWikiAnswerTool(workspace).execute({
       name: "wiki.answer.propose",
       input: {
-        question: "How does LLM Wiki work?",
-        summary: "Agents maintain the wiki from accepted sources.",
-        acceptedClaims: [
-          {
-            text: "Agents maintain the wiki from accepted sources.",
-            source: `raw/sources/${sourceId}.md`,
-          },
-        ],
+        task: task.output,
+        result: {
+          schemaVersion: wikiAnswerResultSchemaVersion,
+          taskId: answerTask.id,
+          taskDigest: answerTask.digest,
+          question: answerTask.question,
+          summary: "Agents maintain the wiki from accepted sources.",
+          acceptedClaims: [
+            {
+              text: "Agents maintain the wiki from accepted sources.",
+              sourceId,
+            },
+          ],
+        },
       },
     });
 
@@ -112,5 +132,21 @@ describe("local tools", () => {
     await expect(
       readFile(String((run.output as { path: string }).path), "utf8"),
     ).resolves.toContain('"task": "answer"');
+  });
+
+  it("rejects legacy answer proposals that are not bound to a task", async () => {
+    const workspace = await tempWorkspace();
+    const tool = new ProposeWikiAnswerTool(workspace);
+
+    await expect(
+      tool.execute({
+        name: "wiki.answer.propose",
+        input: {
+          question: "Question",
+          summary: "Summary",
+          acceptedClaims: [{ text: "Claim", source: "raw/sources/source.md" }],
+        },
+      }),
+    ).rejects.toThrow("wiki.answer.propose requires task");
   });
 });
