@@ -4,36 +4,39 @@ slug: karpathy-llm-wiki
 kind: source
 status: active
 createdAt: 2026-06-19T00:00:00.000Z
-updatedAt: 2026-06-19T01:00:00.000Z
+updatedAt: 2026-07-27T07:41:29.819Z
 reviewAfter: 2026-12-19T00:00:00.000Z
 sources:
+  - raw/sources/karpathy-llm-wiki-original-verification.md
   - raw/sources/karpathy-llm-wiki.md
   - raw/sources/karpathy-llm-wiki-comments.md
 ---
 
 ## Summary
 
-Karpathy's gist describes [[llm-wiki-operating-model]]: an agent-maintained markdown wiki that sits between humans and raw sources. Instead of using RAG only to retrieve chunks at query time, the agent compiles durable pages, links concepts, records contradictions, and files valuable answers back into the wiki. The local raw source is a source note with URL and retrieval metadata rather than a verbatim full-text copy. The visible comments add reliability constraints: human review gates, citation-backed deduplication, append-only or partitioned writes, and drift detection.
+Karpathy proposes a configurable personal or team knowledge-base pattern in which an LLM incrementally maintains interlinked Markdown from curated sources.
 
 ## Key Claims
 
-- accepted: An LLM Wiki differs from ordinary RAG by compiling and maintaining persistent markdown knowledge instead of re-deriving synthesis from raw retrieved chunks on every query.
+- accepted: Karpathy presents the LLM Wiki as a configurable pattern rather than a fixed product or reference implementation.
+  source: raw/sources/karpathy-llm-wiki-original-verification.md
+- accepted: The proposal contrasts a persistent compiled wiki with retrieval workflows that reassemble raw chunks for every question.
   source: raw/sources/karpathy-llm-wiki.md
-- accepted: The pattern uses three layers: immutable raw sources, LLM-owned wiki pages, and schema or agent instructions that define maintenance workflows.
+- accepted: The proposal uses three layers consisting of immutable sources, generated Markdown pages, and maintenance instructions.
+  source: raw/sources/karpathy-llm-wiki-original-verification.md
+- accepted: Ingest integrates a source into summaries, related pages, the index, and the append-only log.
+  source: raw/sources/karpathy-llm-wiki-original-verification.md
+- accepted: Useful query answers can become durable wiki pages instead of disappearing with chat history.
+  source: raw/sources/karpathy-llm-wiki-original-verification.md
+- accepted: The proposed lint operation checks contradictions, stale knowledge, missing structure, missing links, and research gaps.
+  source: raw/sources/karpathy-llm-wiki-original-verification.md
+- accepted: The author reports that index-first navigation worked at roughly one hundred sources and hundreds of pages without presenting that scale as a controlled benchmark.
+  source: raw/sources/karpathy-llm-wiki-original-verification.md
+- accepted: Local Markdown search, Obsidian features, Marp, Dataview, and git are optional tools rather than required parts of the pattern.
   source: raw/sources/karpathy-llm-wiki.md
-- accepted: Ingest should integrate new sources into existing pages by updating summaries, entity pages, concept pages, syntheses, index entries, and the chronological log.
+- accepted: People curate sources, choose questions, direct analysis, and judge meaning while the LLM handles repetitive maintenance.
   source: raw/sources/karpathy-llm-wiki.md
-- accepted: Query answers can become durable wiki pages when they contain reusable analysis, comparisons, or connections that should not disappear into chat history.
-  source: raw/sources/karpathy-llm-wiki.md
-- accepted: Lint passes should look for contradictions, stale claims, orphan pages, missing cross-references, missing concept pages, and research gaps.
-  source: raw/sources/karpathy-llm-wiki.md
-- accepted: The index is content-oriented navigation, while the log is an append-only chronological record that helps humans and agents understand recent wiki evolution.
-  source: raw/sources/karpathy-llm-wiki.md
-- accepted: Humans remain responsible for source curation, question selection, review, and meaning-making, while the LLM handles repetitive wiki maintenance.
-  source: raw/sources/karpathy-llm-wiki.md
-- accepted: The comment discussion identifies semantic duplication as a separate risk from git textual merge conflicts, so multi-agent wiki writes need citation-backed deduplication and commutative write models.
-  source: raw/sources/karpathy-llm-wiki-comments.md
-- accepted: Ambiguous contradictions, stale-memory updates, and user-owned interpretations should be routed through human review instead of silent autonomous overwrite.
+- accepted: The comment discussion adds review gates, citation-backed deduplication, concurrent-write controls, provenance, and drift detection.
   source: raw/sources/karpathy-llm-wiki-comments.md
 
 ## Links

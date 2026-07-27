@@ -4,7 +4,7 @@ slug: advice-for-new-principal-tech-ics
 kind: source
 status: active
 createdAt: 2026-06-18T10:38:36.000Z
-updatedAt: 2026-06-19T01:00:00.000Z
+updatedAt: 2026-07-27T07:41:31.704Z
 reviewAfter: 2026-12-19T00:00:00.000Z
 sources:
   - raw/sources/advice-for-new-principal-tech-ics.md
@@ -13,35 +13,35 @@ sources:
 
 ## Summary
 
-Ziyou Yan's article frames the principal engineer/scientist role as a leverage role: stay technically grounded, but spend more energy on judgment, alignment, sponsorship, teaching, delegation, and choosing the work that would not happen without you. The reusable operating model is captured in [[principal-ic-operating-model]].
+Ziyou Yan describes principal work as a flexible leverage role built on technical judgment, organizational influence, clear decision roles, and deliberate multiplication of others.
 
 ## Key Claims
 
-- accepted: Principal ICs do not share one universal operating style; effective styles include deep technical leadership, horizontal influence, complexity reduction, and multi-org alignment.
+- accepted: There is no single principal operating style because the role can emphasize technical depth, horizontal influence, pathfinding, or multi-organization alignment.
   source: raw/sources/advice-for-new-principal-tech-ics.md
-- accepted: At principal level, individual coding remains useful but the highest leverage work often shifts toward vision, design feedback, sponsorship, context sharing, and helping other builders become more effective.
+- accepted: Work that enabled promotion remains useful, but higher leverage increasingly comes from vision, review, sponsorship, context, and developing others.
   source: raw/sources/advice-for-new-principal-tech-ics.md
-- accepted: Principal ICs need to communicate, build momentum, and convince others to care enough to act, not merely be technically correct.
+- accepted: Principal judgment can span product, design, engineering, science, quality, hiring, finance, and culture.
   source: raw/sources/advice-for-new-principal-tech-ics.md
-- accepted: High-value principal work often includes teaching the organization to value important work it does not yet naturally prioritize.
+- accepted: Technical correctness is insufficient without communication, alignment, and enough momentum for others to act.
   source: raw/sources/advice-for-new-principal-tech-ics.md
-- accepted: A principal should identify work that would not happen without them and increasingly scale outcomes through coaching, delegation, and developing others.
-  source: raw/sources/advice-for-new-principal-tech-ics.md
-- accepted: Principal ICs should reduce dependency on themselves by moving from being essential on the critical path to being adjacent enough to guide decisions and unblock teams.
+- accepted: High-leverage principal work can make important but undervalued work visible and actionable to the organization.
   source: raw/sources/advice-for-new-principal-tech-ics-fuller-notes.md
-- accepted: Principal IC work can span product, design, engineering, science, quality, hiring, finance, and culture when judgment is useful.
-  source: raw/sources/advice-for-new-principal-tech-ics.md
-- accepted: Timely small interventions such as reviews, context packets, sponsorship, corrections, or questions can create high leverage when they change a team's trajectory.
+- accepted: Small interventions such as reviews, context packets, sponsorship, corrections, or questions can change a team's trajectory.
   source: raw/sources/advice-for-new-principal-tech-ics-fuller-notes.md
-- accepted: Principal ICs should clarify whether they are acting as owner, sponsor, or consultant so teams understand decision rights and support expectations.
+- accepted: Review and promotion feedback should fit the person's level, and low-quality or mismatched feedback can be declined or reframed.
   source: raw/sources/advice-for-new-principal-tech-ics-fuller-notes.md
-- accepted: Seniority creates implicit influence, so principal ICs should make their reasoning, confidence level, and intent explicit.
-  source: raw/sources/advice-for-new-principal-tech-ics.md
-- accepted: Principal ICs should make room for others to speak, decide, and receive credit because seniority can otherwise crowd out team ownership.
+- accepted: Principals should clarify whether they are acting as owner, sponsor, or consultant.
   source: raw/sources/advice-for-new-principal-tech-ics-fuller-notes.md
-- accepted: Breadth roles can consume all available time through reviews, escalations, and meetings, so principals need to protect thinking time and clarify where they are owner, sponsor, or consultant.
+- accepted: Principals should make room for others to speak, decide, and receive credit instead of filling every gap themselves.
+  source: raw/sources/advice-for-new-principal-tech-ics-fuller-notes.md
+- accepted: Seniority creates implicit influence that requires deliberate communication of reasoning, confidence, and intent.
   source: raw/sources/advice-for-new-principal-tech-ics.md
-- accepted: Sustainable principal work requires peer support, continued learning, and attention to personal energy and burnout risk.
+- accepted: Scaling through coaching and delegation should help the organization make good decisions without depending on one principal.
+  source: raw/sources/advice-for-new-principal-tech-ics.md
+- accepted: Breadth roles need active time protection, clear scope, continued learning, peer support, and attention to burnout.
   source: raw/sources/advice-for-new-principal-tech-ics.md
 
 ## Links
+
+- [[principal-ic-operating-model]]
