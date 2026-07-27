@@ -29,6 +29,7 @@ import {
   parseWikiAnswerResult,
   parseWikiAnswerResultForTask,
   parseWikiAnswerTask,
+  parseWikiKnowledgeContext,
   parseWikiMemoryComparisonJudgmentInput,
   parseWikiMemoryContext,
   parseWikiMemoryEvaluationInput,
@@ -48,6 +49,7 @@ import {
   prepareWikiAnswerTask,
   prepareWikiEvolve,
   prepareWikiIngest,
+  prepareWikiKnowledgeContext,
   prepareWikiMemoryContext,
   prepareWikiMemoryControlTask,
   prepareWikiQuery,
@@ -62,10 +64,16 @@ import {
   renderWikiPage,
   summarizeWikiMemoryEvaluations,
   validateCurrentWikiAnswerTask,
+  validateCurrentWikiKnowledgeContext,
   validateCurrentWikiMemoryContext,
   validateCurrentWikiRebuildTask,
   validateCurrentWikiReflectionTask,
 } from "../src/index.js";
+import {
+  buildWikiKnowledgeContext,
+  selectWikiKnowledge,
+  wikiKnowledgeReference,
+} from "../src/knowledge.js";
 import {
   buildWikiMemoryContext,
   buildWikiMemoryEvaluationRecord,
@@ -439,8 +447,120 @@ describe("wiki", () => {
 
     expect(packet.task).toBe("query");
     expect(packet.contextFiles).toContain("pages/concepts/llm-wiki.md");
+    expect(packet.contextFiles).toContain("raw/sources/karpathy-llm-wiki.md");
     expect(packet.prompt).toContain("How does LLM Wiki work?");
     expect(packet.prompt).toContain("Prepare reusable answers as reviewable proposals");
+  });
+
+  it("retrieves ranked active knowledge with Korean query normalization", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    const path = await writeKnowledgePage(
+      workspace.root,
+      "synthesis",
+      "AI Data Learning Advantage",
+      "active",
+      "## 결론\n\n데이터는 검증된 학습 구조의 재료다.\n",
+    );
+    await writeKnowledgePage(
+      workspace.root,
+      "concept",
+      "AI Operations",
+      "active",
+      "## Summary\n\nGeneral AI operations.\n",
+    );
+    await writeKnowledgePage(
+      workspace.root,
+      "source",
+      "Old Data Note",
+      "active",
+      "## Summary\n\n데이터 기록.\n",
+      "2026-06-16T12:00:00.000Z",
+    );
+
+    const context = await prepareWikiKnowledgeContext(
+      workspace,
+      "AI 시대에 해자가 되는 것은 데이터일까?",
+      now(),
+    );
+
+    expect(context.knowledge[0]).toMatchObject({
+      path,
+      kind: "synthesis",
+      matchedTerms: expect.arrayContaining(["ai", "데이터"]),
+    });
+    expect(context.knowledge.map(({ path: selected }) => selected)).not.toContain(
+      "pages/sources/old-data-note.md",
+    );
+    expect(parseWikiKnowledgeContext(context)).toEqual(context);
+    await expect(validateCurrentWikiKnowledgeContext(workspace, context, now())).resolves.toEqual(
+      context,
+    );
+    await writeFile(
+      join(workspace.root, "wiki", path),
+      `${context.knowledge[0]?.content}\nChanged.`,
+    );
+    await expect(validateCurrentWikiKnowledgeContext(workspace, context, now())).rejects.toThrow(
+      "stale",
+    );
+  });
+
+  it("scores knowledge fields deterministically and rejects invalid contexts", () => {
+    const candidate = {
+      path: "pages/concepts/beta.md",
+      title: "Alpha",
+      slug: "beta",
+      kind: "concept",
+      status: "active",
+      sources: ["raw/sources/source.md"],
+      content: "## Summary\n\nGamma.\n\n## Detail\n\nDelta.\n",
+    };
+    const knowledge = selectWikiKnowledge(
+      [
+        candidate,
+        { ...candidate, path: "pages/concepts/stale.md", reviewAfter: "bad" },
+        { ...candidate, path: "pages/concepts/draft.md", status: "draft" },
+      ],
+      "alpha beta gamma delta",
+      now(),
+    );
+    const context = buildWikiKnowledgeContext({
+      query: "alpha beta gamma delta",
+      preparedAt: now().toISOString(),
+      knowledge,
+    });
+    const first = knowledge[0];
+    if (first === undefined) throw new Error("Expected a knowledge match");
+
+    expect(knowledge).toMatchObject([
+      { score: 19, matchedTerms: ["alpha", "beta", "delta", "gamma"] },
+    ]);
+    expect(wikiKnowledgeReference(first)).not.toHaveProperty("content");
+    expect(selectWikiKnowledge([candidate], "what is the", now())).toEqual([]);
+    expect(
+      selectWikiKnowledge(
+        [{ ...candidate, title: "AI", slug: "ai", content: "## Summary\n\nGeneral." }],
+        "AI 해자",
+        now(),
+      ),
+    ).toEqual([]);
+    expect(
+      selectWikiKnowledge(
+        [{ ...candidate, title: "LLM Wiki", slug: "llm-wiki" }],
+        "LLM Wiki",
+        now(),
+      ),
+    ).toHaveLength(1);
+    expect(() => selectWikiKnowledge([candidate], "query", now(), 6)).toThrow("limit");
+    expect(() => selectWikiKnowledge([candidate], "\n", now())).toThrow("one-line");
+    expect(() => parseWikiKnowledgeContext({ ...context, extra: true })).toThrow("unknown");
+    expect(() =>
+      parseWikiKnowledgeContext({
+        ...context,
+        knowledge: [{ ...first, sha256: "0".repeat(64) }],
+      }),
+    ).toThrow("hash");
   });
 
   it("prepares evolve task packets for manual or automated improvement", async () => {
@@ -952,6 +1072,68 @@ describe("wiki", () => {
     await expect(wikiState(workspace.root)).resolves.toEqual(before);
   });
 
+  it("binds retrieved knowledge and its raw sources without explicit source ids", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    const path = await writeKnowledgePage(
+      workspace.root,
+      "concept",
+      "Durable Knowledge",
+      "active",
+      "## Summary\n\nDurable knowledge compounds across questions.\n",
+    );
+
+    const task = await prepareWikiAnswerTask(workspace, {
+      question: "How does durable knowledge compound?",
+    });
+
+    expect(task.requestedSourceIds).toEqual([]);
+    expect(task.knowledge).toMatchObject([{ path, kind: "concept" }]);
+    expect(task.evidence).toEqual([
+      { id: "karpathy-llm-wiki", path: "raw/sources/karpathy-llm-wiki.md" },
+    ]);
+    expect(task.contexts.map(({ path: contextPath }) => contextPath)).toEqual(
+      expect.arrayContaining([path, "raw/sources/karpathy-llm-wiki.md"]),
+    );
+    expect(task.prompt).toContain("compiled Wiki page does not itself prove truth");
+    expect(parseWikiAnswerTask(task)).toEqual(task);
+    expect(parseWikiAnswerResultForTask(task, answerTaskResult(task))).toEqual(
+      answerTaskResult(task),
+    );
+
+    const selectedContext = task.contexts.find(({ path: contextPath }) => contextPath === path);
+    if (selectedContext === undefined) throw new Error("Expected selected knowledge context");
+    const selectedKnowledge = task.knowledge[0];
+    if (selectedKnowledge === undefined) throw new Error("Expected selected knowledge");
+    expect(() =>
+      parseWikiAnswerTask({
+        ...task,
+        knowledge: [
+          {
+            ...selectedKnowledge,
+            sources: ["raw/sources/missing.md"],
+          },
+        ],
+      }),
+    ).toThrow("missing from evidence");
+    await writeFile(
+      join(workspace.root, "wiki", path),
+      `${selectedContext.content}\nChanged.\n`,
+      "utf8",
+    );
+    await expect(validateCurrentWikiAnswerTask(workspace, task)).rejects.toThrow("stale");
+  });
+
+  it("rejects answer tasks with neither explicit nor retrieved source evidence", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+
+    await expect(
+      prepareWikiAnswerTask(workspace, { question: "Unrelated unanswered question" }),
+    ).rejects.toThrow("citable source evidence");
+  });
+
   it("retrieves at most three current active memories by relevance with stable tie breaks", async () => {
     const workspace = await tempWorkspace();
     await initWiki(workspace);
@@ -1242,6 +1424,8 @@ describe("wiki", () => {
     expect(control.memories).toEqual([]);
     expect(control.contexts.map(({ path }) => path)).not.toContain(memory.path);
     expect(control.evidence).toEqual(task.evidence);
+    expect(control.requestedSourceIds).toEqual(task.requestedSourceIds);
+    expect(control.knowledge).toEqual(task.knowledge);
     expect(control.question).toBe(task.question);
     expect(control.instructions).not.toContainEqual(expect.stringContaining("guidance only"));
     expect(parseWikiMemoryComparisonJudgmentInput(judgment)).toEqual(judgment);
@@ -1396,6 +1580,8 @@ describe("wiki", () => {
       instructions: task.instructions,
       contexts: [source],
       evidence: task.evidence,
+      requestedSourceIds: task.requestedSourceIds,
+      knowledge: [],
       memories: [],
     });
 
@@ -2987,6 +3173,38 @@ async function writeMemoryPage(
     renderWikiPage(metadata, `## Summary\n\n${title} guidance.\n\n## Links\n\n`),
     "utf8",
   );
+}
+
+async function writeKnowledgePage(
+  root: string,
+  kind: "source" | "concept" | "entity" | "synthesis" | "question",
+  title: string,
+  status: "active" | "draft" | "superseded",
+  body: string,
+  reviewAfter = "2027-06-17T12:00:00.000Z",
+): Promise<string> {
+  const slug = title.toLowerCase().replaceAll(" ", "-");
+  const directory =
+    kind === "entity" ? "entities" : kind === "synthesis" ? "syntheses" : `${kind}s`;
+  const path = `pages/${directory}/${slug}.md`;
+  await writeFile(
+    join(root, "wiki", path),
+    renderWikiPage(
+      {
+        title,
+        slug,
+        kind,
+        status,
+        createdAt: "2026-06-17T12:00:00.000Z",
+        updatedAt: "2026-06-17T12:00:00.000Z",
+        reviewAfter,
+        sources: ["raw/sources/karpathy-llm-wiki.md"],
+      },
+      body,
+    ),
+    "utf8",
+  );
+  return path;
 }
 
 function pagePath(root: string): string {

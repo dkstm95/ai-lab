@@ -15,6 +15,16 @@ import {
   parseWikiAnswerTask,
 } from "./answer-exchange.js";
 import {
+  type WikiKnowledgeContext,
+  type WikiKnowledgeMatch,
+  type WikiKnowledgePageCandidate,
+  buildWikiKnowledgeContext,
+  parseWikiKnowledgeContext,
+  selectWikiKnowledge,
+  wikiKnowledgeInstruction,
+  wikiKnowledgeReference,
+} from "./knowledge.js";
+import {
   type WikiMemoryComparisonEvidence,
   type WikiMemoryComparisonJudgmentInput,
   type WikiMemoryContext,
@@ -139,6 +149,19 @@ export type {
   WikiMemoryTaskOutcome,
   WikiMemoryVerdict,
 } from "./memory.js";
+export {
+  parseWikiKnowledgeContext,
+  wikiKnowledgeContextSchemaVersion,
+  wikiKnowledgeInstruction,
+  wikiKnowledgeKinds,
+} from "./knowledge.js";
+export type {
+  WikiKnowledgeContext,
+  WikiKnowledgeKind,
+  WikiKnowledgeMatch,
+  WikiKnowledgePageCandidate,
+  WikiKnowledgeReference,
+} from "./knowledge.js";
 export {
   parseWikiRebuildReport,
   parseWikiRebuildResult,
@@ -332,7 +355,7 @@ export interface WikiAnswerProposalInput {
 
 export interface PrepareWikiAnswerTaskInput {
   readonly question: string;
-  readonly sourceIds: readonly string[];
+  readonly sourceIds?: readonly string[];
   readonly title?: string;
 }
 
@@ -487,17 +510,38 @@ export async function prepareWikiIngest(
 export async function prepareWikiQuery(
   workspace: Workspace,
   question: string,
+  now: Date = new Date(),
 ): Promise<WikiTaskPacket> {
-  const pages = await selectQueryPages(workspace, question);
-  const contextFiles = [
-    "schema.md",
-    "index.md",
-    ...pages.map((page) => relativeWikiPath(workspace, page.path)),
-  ];
-  return validatedTaskPacket(
-    workspace,
-    taskPacket("query", queryPrompt(question), contextFiles, []),
+  const snapshot = { question, now: new Date(now.getTime()) };
+  return withWikiWriteLock(workspace, (locked) =>
+    prepareWikiQueryLocked(locked, snapshot.question, snapshot.now),
   );
+}
+
+export async function prepareWikiKnowledgeContext(
+  workspace: Workspace,
+  query: string,
+  now: Date = new Date(),
+): Promise<WikiKnowledgeContext> {
+  const snapshot = { query, now: new Date(now.getTime()) };
+  return withWikiWriteLock(workspace, (locked) =>
+    prepareWikiKnowledgeContextLocked(locked, snapshot.query, snapshot.now),
+  );
+}
+
+export async function validateCurrentWikiKnowledgeContext(
+  workspace: Workspace,
+  value: unknown,
+  now: Date = new Date(),
+): Promise<WikiKnowledgeContext> {
+  const context = parseWikiKnowledgeContext(value);
+  return withWikiWriteLock(workspace, async (locked) => {
+    const knowledge = await wikiKnowledgeMatches(locked, context.query, new Date(now.getTime()));
+    if (JSON.stringify(knowledge) !== JSON.stringify(context.knowledge)) {
+      throw new Error("Wiki knowledge context is stale");
+    }
+    return context;
+  });
 }
 
 export async function prepareWikiMemoryContext(
@@ -690,31 +734,60 @@ async function prepareWikiAnswerTaskLocked(
   input: PrepareWikiAnswerTaskInput,
 ): Promise<WikiAnswerTask> {
   await assertInitializedWiki(workspace);
-  const [packet, evidence, memories] = await Promise.all([
-    prepareWikiQuery(workspace, input.question),
-    answerTaskEvidence(workspace, input.sourceIds),
-    wikiMemoryMatches(workspace, input.question, new Date()),
-  ]);
+  const basis = await answerTaskBasis(workspace, input, new Date());
+  const packet = await queryPacketForKnowledge(workspace, input.question, basis.knowledge);
   return buildWikiAnswerTask({
     ...input,
-    instructions: answerTaskInstructions(packet, memories),
-    contexts: await readWikiContextFiles(workspace, [
-      ...packet.contextFiles,
-      ...memories.map(({ path }) => path),
-      ...evidence.map((source) => source.path),
-    ]),
-    evidence,
-    memories: memories.map(wikiMemoryReference),
+    requestedSourceIds: input.sourceIds ?? [],
+    instructions: answerTaskInstructions(packet, basis.knowledge, basis.memories),
+    contexts: await answerTaskContexts(workspace, packet, basis),
+    evidence: basis.evidence,
+    knowledge: basis.knowledge.map(wikiKnowledgeReference),
+    memories: basis.memories.map(wikiMemoryReference),
   });
+}
+
+async function answerTaskBasis(
+  workspace: Workspace,
+  input: PrepareWikiAnswerTaskInput,
+  preparedAt: Date,
+) {
+  const [knowledge, requestedEvidence, memories] = await Promise.all([
+    wikiKnowledgeMatches(workspace, input.question, preparedAt),
+    answerTaskEvidence(workspace, input.sourceIds ?? []),
+    wikiMemoryMatches(workspace, input.question, preparedAt),
+  ]);
+  return {
+    knowledge,
+    memories,
+    evidence: mergeAnswerEvidence(
+      requestedEvidence,
+      await knowledgeTaskEvidence(workspace, knowledge),
+    ),
+  };
+}
+
+async function answerTaskContexts(
+  workspace: Workspace,
+  packet: WikiTaskPacket,
+  basis: Awaited<ReturnType<typeof answerTaskBasis>>,
+) {
+  return readWikiContextFiles(workspace, [
+    ...packet.contextFiles,
+    ...basis.memories.map(({ path }) => path),
+    ...basis.evidence.map(({ path }) => path),
+  ]);
 }
 
 function answerTaskInstructions(
   packet: WikiTaskPacket,
+  knowledge: readonly WikiKnowledgeMatch[],
   memories: readonly WikiMemoryMatch[],
 ): string[] {
   return [
     packet.prompt,
     ...packet.constraints,
+    ...(knowledge.length === 0 ? [] : [wikiKnowledgeInstruction]),
     ...(memories.length === 0 ? [] : [wikiMemoryInstruction]),
   ];
 }
@@ -1101,19 +1174,20 @@ function sourceFileId(name: string): string {
 }
 
 function normalizedAnswerTaskInput(input: PrepareWikiAnswerTaskInput): PrepareWikiAnswerTaskInput {
+  const sourceValues = input.sourceIds ?? [];
   if (
-    !Array.isArray(input.sourceIds) ||
-    input.sourceIds.some((sourceId) => typeof sourceId !== "string")
+    !Array.isArray(sourceValues) ||
+    sourceValues.some((sourceId) => typeof sourceId !== "string")
   ) {
-    throw new Error("Wiki answer task requires a question and at least one valid source id");
+    throw new Error("Wiki answer task source ids must be a string list");
   }
-  const sourceIds = unique(input.sourceIds.map((sourceId) => sourceId.trim())).sort();
+  const sourceIds = unique(sourceValues.map((sourceId) => sourceId.trim())).sort();
   if (
     !validTaskQuestion(input.question) ||
-    !validTaskSources(sourceIds) ||
+    !validOptionalTaskSources(sourceIds) ||
     !validTitle(input.title)
   ) {
-    throw new Error("Wiki answer task requires a question and at least one valid source id");
+    throw new Error("Wiki answer task requires a valid question and optional source ids");
   }
   const normalized = { question: input.question.trim(), sourceIds };
   return input.title === undefined ? normalized : { ...normalized, title: input.title.trim() };
@@ -1131,6 +1205,10 @@ function validTaskSources(sourceIds: readonly string[]): boolean {
   );
 }
 
+function validOptionalTaskSources(sourceIds: readonly string[]): boolean {
+  return sourceIds.length <= 100 && sourceIds.every((sourceId) => boundedOneLine(sourceId, 500));
+}
+
 async function answerTaskEvidence(
   workspace: Workspace,
   sourceIds: readonly string[],
@@ -1143,10 +1221,45 @@ async function answerTaskEvidence(
   return evidence;
 }
 
+async function knowledgeTaskEvidence(
+  workspace: Workspace,
+  knowledge: readonly WikiKnowledgeMatch[],
+): Promise<WikiAnswerTaskEvidence[]> {
+  const paths = unique(knowledge.flatMap(({ sources }) => sources)).sort();
+  return Promise.all(
+    paths.map(async (path) => {
+      const source = await resolveWikiSource(workspace, path);
+      return {
+        id: sourceFileId(posix.basename(path)),
+        path: relativeWikiPath(workspace, source.path),
+      };
+    }),
+  );
+}
+
+function mergeAnswerEvidence(
+  requested: readonly WikiAnswerTaskEvidence[],
+  retrieved: readonly WikiAnswerTaskEvidence[],
+): WikiAnswerTaskEvidence[] {
+  const evidence = new Map<string, WikiAnswerTaskEvidence>();
+  for (const source of [...requested, ...retrieved]) {
+    const previous = evidence.get(source.id);
+    if (previous !== undefined && previous.path !== source.path) {
+      throw new Error(`Wiki answer evidence id is ambiguous: ${source.id}`);
+    }
+    evidence.set(source.id, source);
+  }
+  const merged = [...evidence.values()].sort((left, right) => left.id.localeCompare(right.id));
+  if (merged.length === 0 || merged.length > 100) {
+    throw new Error("Wiki answer task requires citable source evidence");
+  }
+  return merged;
+}
+
 async function assertAnswerTaskCurrent(workspace: Workspace, task: WikiAnswerTask): Promise<void> {
   const input = {
     question: task.question,
-    sourceIds: task.evidence.map((source) => source.id),
+    sourceIds: task.requestedSourceIds,
   };
   const current = await prepareWikiAnswerTaskLocked(
     workspace,
@@ -1712,8 +1825,8 @@ function ingestPrompt(sourceId: string): string {
 function queryPrompt(question: string): string {
   return [
     "Answer from the LLM Wiki.",
-    "Read index.md first, then the provided relevant pages.",
-    "Cite page/source paths for accepted claims.",
+    "Read index.md first, then the retrieved knowledge pages.",
+    "Use only bound raw source IDs for accepted claim citations.",
     "Prepare reusable answers as reviewable proposals with explicit claim/source pairs.",
     `Question: ${question}`,
   ].join("\n");
@@ -1798,6 +1911,74 @@ function evolveConstraints(): string[] {
   ];
 }
 
+async function prepareWikiQueryLocked(
+  workspace: Workspace,
+  question: string,
+  now: Date,
+): Promise<WikiTaskPacket> {
+  const knowledge = await wikiKnowledgeMatches(workspace, question, now);
+  return queryPacketForKnowledge(workspace, question, knowledge);
+}
+
+async function queryPacketForKnowledge(
+  workspace: Workspace,
+  question: string,
+  knowledge: readonly WikiKnowledgeMatch[],
+): Promise<WikiTaskPacket> {
+  const sourceFiles = unique(knowledge.flatMap(({ sources }) => sources)).sort();
+  const contextFiles = [
+    "schema.md",
+    "index.md",
+    ...knowledge.map(({ path }) => path),
+    ...sourceFiles,
+  ];
+  return validatedTaskPacket(
+    workspace,
+    taskPacket("query", queryPrompt(question), contextFiles, []),
+  );
+}
+
+async function prepareWikiKnowledgeContextLocked(
+  workspace: Workspace,
+  query: string,
+  now: Date,
+): Promise<WikiKnowledgeContext> {
+  await assertInitializedWiki(workspace);
+  return buildWikiKnowledgeContext({
+    query,
+    preparedAt: now.toISOString(),
+    knowledge: await wikiKnowledgeMatches(workspace, query, now),
+  });
+}
+
+async function wikiKnowledgeMatches(
+  workspace: Workspace,
+  query: string,
+  now: Date,
+): Promise<WikiKnowledgeMatch[]> {
+  const pages = await listWikiPages(workspace);
+  return selectWikiKnowledge(
+    pages.map((page) => knowledgePageCandidate(workspace, page)),
+    query,
+    now,
+  );
+}
+
+function knowledgePageCandidate(workspace: Workspace, page: WikiPage): WikiKnowledgePageCandidate {
+  const candidate = {
+    path: relativeWikiPath(workspace, page.path),
+    title: page.metadata.title,
+    slug: page.metadata.slug,
+    kind: page.metadata.kind,
+    status: page.metadata.status,
+    sources: page.metadata.sources,
+    content: page.content,
+  };
+  return page.metadata.reviewAfter === undefined
+    ? candidate
+    : { ...candidate, reviewAfter: page.metadata.reviewAfter };
+}
+
 async function prepareWikiMemoryContextLocked(
   workspace: Workspace,
   query: string,
@@ -1840,27 +2021,6 @@ function memoryPageCandidate(workspace: Workspace, page: WikiPage): WikiMemoryPa
   return page.metadata.reviewAfter === undefined
     ? withTerms
     : { ...withTerms, reviewAfter: page.metadata.reviewAfter };
-}
-
-async function selectQueryPages(workspace: Workspace, question: string): Promise<WikiPage[]> {
-  const pages = await listWikiPages(workspace);
-  const tokens = queryTokens(question);
-  return pages
-    .filter((page) => !["playbook", "failure", "decision"].includes(page.metadata.kind))
-    .filter((page) => pageMatches(page, tokens))
-    .slice(0, 5);
-}
-
-function queryTokens(question: string): string[] {
-  return question
-    .toLowerCase()
-    .split(/[^a-z0-9가-힣]+/)
-    .filter((token) => token.length > 1);
-}
-
-function pageMatches(page: WikiPage, tokens: readonly string[]): boolean {
-  const text = `${page.metadata.title}\n${page.metadata.slug}\n${page.content}`.toLowerCase();
-  return tokens.length === 0 || tokens.some((token) => text.includes(token));
 }
 
 async function recentRunFiles(workspace: Workspace): Promise<string[]> {
@@ -3295,7 +3455,7 @@ function schemaWorkflowRules(): string {
     "## Ingest",
     "Read schema.md, index.md, then one raw source. Preserve source coverage before compression by keeping distinct operating models, practices, risks, and tradeoffs as separate source-backed claims. Create or update source, concept, entity, and synthesis pages when the source contains reusable knowledge beyond a one-off summary. Check existing claim/source pairs before writing to avoid semantic duplicates. Mark contradictions as conflicted instead of overwriting silently. Route ambiguous contradictions, stale updates, and user-owned interpretations to review instead of silently overwriting. Prepare candidate page and index changes only. Ingest approval and promotion are not implemented yet.",
     "## Query",
-    "Read index.md first, then relevant pages. Answer with citations to wiki pages or raw sources. Prepare reusable answers as proposals with explicit claim/source pairs. Do not promote them before approval.",
+    "Retrieve at most five relevant active source, concept, entity, synthesis, or question pages whose review date has not expired. Use them as navigation and synthesis context, then bind their raw sources as citable evidence. A compiled page does not itself prove a factual claim. Explicit source IDs add evidence but are not required when retrieved pages provide it. Prepare reusable answers as proposals with explicit claim/source pairs. Do not promote them before approval.",
     "## Evolve",
     "Manual or automated agents read lint issues, recent runs, and candidate pages, then prepare small source-backed candidate updates. Evolve approval and promotion are not implemented yet.",
     "## Reflect",

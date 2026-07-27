@@ -55,8 +55,8 @@ LLM Wiki는 관리 영역에 복사한 source와 사람이 읽을 수 있는 재
 ```bash
 pnpm cli wiki init
 pnpm cli wiki source add notes.md --title "조사 노트"
-pnpm cli wiki answer task "무엇을 재사용 지식으로 남길까?" \
-  --sources <source-id> --out task.json
+pnpm cli wiki knowledge retrieve "무엇이 지속 가능한 경쟁 우위를 만드는가?"
+pnpm cli wiki answer task "무엇이 지속 가능한 경쟁 우위를 만드는가?" --out task.json
 
 # .ai-lab/wiki-exchange/task.json의 prompt를 원하는 AI에 전달한다.
 # AI가 반환한 JSON을 .ai-lab/wiki-exchange/result.json으로 저장한다.
@@ -80,7 +80,9 @@ pnpm cli wiki answer apply proposal.json \
   --reviewer "<이름>" --accept-digest "<검토한-전체-digest>"
 ```
 
-task에는 선택한 source 원문, Wiki schema와 index, 최대 5개의 관련 page가 들어간다.
+answer task는 최대 5개의 active 지식 page를 검색하고 그 page가 가리키는 raw source를
+인용 가능한 근거로 묶는다. `--sources <source-id>`는 선택 사항이며 근거를 추가한다.
+task에는 Wiki schema와 index도 들어간다.
 구독형 서비스나 다른 모델에 전달하기 전에 공개 내용을 확인해야 한다. 같은 엄격한 result
 규약을 웹 구독, 로컬 모델, 신뢰된 runner wrapper가 공유한다. task와 proposal 생성은 실제
 Wiki page를 바꾸지 않는다. host의 runner 흐름은 result artifact만 만들며 proposal과
@@ -107,9 +109,9 @@ lint, 검토한 byte를 다시 확인하고 승격과 audit 기록을 수행한�
 기존 source·concept page의 비파괴 재생성, 비교, digest 승인 기반 승격 절차는
 `docs/wiki-rebuild.md`에 있다.
 
-source 선택은 신뢰된 integration이 소유한다. agent-safe tool은 source를 가져오거나 외부
-전달용 task를 만들거나 proposal을 apply할 수 없다. 경로 이탈, symbolic link, 오래된 task,
-알 수 없는 evidence ID, 과도하게 큰 artifact, 잘못된 교환 데이터는 거부한다.
+명시적 source 추가는 신뢰된 integration이 소유한다. agent-safe tool은 source를 가져오거나
+외부 전달용 task를 만들거나 proposal을 apply할 수 없다. 경로 이탈, symbolic link, 오래된
+task, 알 수 없는 evidence ID, 과도하게 큰 artifact, 잘못된 교환 데이터는 거부한다.
 
 반복 사용할 코드는 `packages/*`에 둔다. 사람이 직접 실행해야 하는 흐름만 `apps/cli` 또는 `apps/service`에서 노출한다. provider SDK나 외부 runner 세부사항은 `packages/model-providers` 안에 격리한다.
 
@@ -130,6 +132,7 @@ pnpm check
 - `docs/testing-guide.md`
 - `docs/external-runner.md`
 - `docs/subscription-runner.md`
+- `docs/wiki-knowledge.md`
 - `docs/contribution-guide.md`
 - `docs/self-evolution-guide.md`
 - `docs/subbrain-design.md`

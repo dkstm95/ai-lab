@@ -12,6 +12,7 @@ import {
   PrepareWikiAnswerTaskTool,
   PrepareWikiEvolveTool,
   PrepareWikiIngestTool,
+  PrepareWikiKnowledgeContextTool,
   PrepareWikiMemoryContextTool,
   PrepareWikiQueryTool,
   PrepareWikiReflectionTool,
@@ -57,6 +58,7 @@ describe("local tools", () => {
       "wiki.lint",
       "wiki.ingest.prepare",
       "wiki.query.prepare",
+      "wiki.knowledge.retrieve",
       "wiki.memory.retrieve",
       "wiki.memory.stats",
       "wiki.evolve.prepare",
@@ -84,6 +86,10 @@ describe("local tools", () => {
     const query = await new PrepareWikiQueryTool(workspace).execute({
       name: "wiki.query.prepare",
       input: { question: "LLM Wiki" },
+    });
+    const knowledge = await new PrepareWikiKnowledgeContextTool(workspace).execute({
+      name: "wiki.knowledge.retrieve",
+      input: { query: "LLM Wiki" },
     });
     const memory = await new PrepareWikiMemoryContextTool(workspace).execute({
       name: "wiki.memory.retrieve",
@@ -136,6 +142,7 @@ describe("local tools", () => {
 
     expect((ingest.output as { task: string }).task).toBe("ingest");
     expect((query.output as { task: string }).task).toBe("query");
+    expect((knowledge.output as { knowledge: unknown[] }).knowledge).toEqual([]);
     expect((memory.output as { memories: unknown[] }).memories).toEqual([]);
     expect((memoryStats.output as { evaluations: number }).evaluations).toBe(0);
     expect((evolve.output as { task: string }).task).toBe("evolve");

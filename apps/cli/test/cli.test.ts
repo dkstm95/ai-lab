@@ -172,6 +172,62 @@ describe("cli", () => {
     );
   });
 
+  it("retrieves Wiki knowledge and prepares an answer without explicit source ids", async () => {
+    const root = await tempRoot();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    await writeFile(join(root, "source.md"), "# Research\nLearning loops create durable value.\n");
+    await runCli(["node", "ai-lab", "wiki", "init"], root);
+    await runCli(
+      ["node", "ai-lab", "wiki", "source", "add", "source.md", "--title", "Research"],
+      root,
+    );
+    const source = loggedJson<{ id: string; path: string }>(log);
+    await writeFile(
+      join(root, "wiki", "pages", "concepts", "learning-loop.md"),
+      knowledgePage(relative(join(root, "wiki"), source.path)),
+      "utf8",
+    );
+
+    await runCli(
+      [
+        "node",
+        "ai-lab",
+        "wiki",
+        "knowledge",
+        "retrieve",
+        "학습 루프가 만드는 가치",
+        "--out",
+        "knowledge-context.json",
+      ],
+      root,
+    );
+    const context = await artifact<{ knowledge: { path: string }[] }>(
+      root,
+      "knowledge-context.json",
+    );
+    expect(context.knowledge.map(({ path }) => path)).toEqual(["pages/concepts/learning-loop.md"]);
+
+    await runCli(
+      [
+        "node",
+        "ai-lab",
+        "wiki",
+        "answer",
+        "task",
+        "학습 루프가 만드는 가치는 무엇인가?",
+        "--out",
+        "knowledge-task.json",
+      ],
+      root,
+    );
+    const task = await artifact<WikiAnswerTask>(root, "knowledge-task.json");
+    expect(task.requestedSourceIds).toEqual([]);
+    expect(task.knowledge.map(({ path }) => path)).toEqual(["pages/concepts/learning-loop.md"]);
+    expect(task.evidence).toEqual([
+      { id: source.id, path: relative(join(root, "wiki"), source.path) },
+    ]);
+  });
+
   it("retrieves, injects, and evaluates reviewed Wiki memory without a model API", async () => {
     const root = await tempRoot();
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -1184,6 +1240,30 @@ Review durable knowledge before reuse.
 
 ## Links
 
+`;
+}
+
+function knowledgePage(source: string): string {
+  return `---
+title: Learning Loop
+slug: learning-loop
+kind: concept
+status: active
+createdAt: 2026-06-17T12:00:00.000Z
+updatedAt: 2026-06-17T12:00:00.000Z
+reviewAfter: 2027-06-17T12:00:00.000Z
+sources:
+  - ${source}
+---
+
+## Summary
+
+학습 루프는 실행과 결과를 연결해 가치를 개선한다.
+
+## Key Claims
+
+- accepted: Learning loops create durable value.
+  source: ${source}
 `;
 }
 
