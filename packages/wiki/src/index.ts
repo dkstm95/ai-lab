@@ -4,13 +4,41 @@ import { extname, isAbsolute, join, posix, relative } from "node:path";
 import { type Workspace, slugify } from "@ai-lab/workspace";
 import {
   type WikiAnswerProposalDraft,
+  type WikiAnswerResult,
   type WikiAnswerTask,
   type WikiAnswerTaskEvidence,
   answerDraftFromExchange,
+  buildWikiAnswerControlTask,
   buildWikiAnswerTask,
   parseWikiAnswerResult,
+  parseWikiAnswerResultForTask,
   parseWikiAnswerTask,
 } from "./answer-exchange.js";
+import {
+  type WikiMemoryComparisonEvidence,
+  type WikiMemoryComparisonJudgmentInput,
+  type WikiMemoryContext,
+  type WikiMemoryEvaluationRecord,
+  type WikiMemoryEvaluationSummary,
+  type WikiMemoryMatch,
+  type WikiMemoryPageCandidate,
+  buildWikiMemoryContext,
+  buildWikiMemoryEvaluationRecord,
+  comparisonOutcome,
+  parseWikiMemoryComparisonJudgmentInput,
+  parseWikiMemoryContext,
+  parseWikiMemoryEvaluationInput,
+  parseWikiMemoryEvaluationRecord,
+  selectWikiMemories,
+  summarizeWikiMemoryEvaluationRecords,
+  wikiMemoryInstruction,
+  wikiMemoryReference,
+} from "./memory.js";
+import {
+  type WikiRebuildDocumentClaim,
+  documentClaims,
+  renderWikiRebuildDocument,
+} from "./rebuild-document.js";
 import {
   type WikiRebuildClaim,
   type WikiRebuildComparison,
@@ -21,9 +49,35 @@ import {
   type WikiRebuildTask,
   buildWikiRebuildReport,
   buildWikiRebuildTask,
+  parseWikiRebuildReport,
   parseWikiRebuildResultForTask,
   parseWikiRebuildTask,
+  wikiRebuildReportSchemaVersion,
 } from "./rebuild-exchange.js";
+import {
+  type PrepareWikiReflectionTaskInput,
+  type WikiReflectionEvidence,
+  type WikiReflectionTask,
+  buildWikiReflectionTask,
+  parseWikiReflectionTask,
+  parseWikiReflectionTaskInput,
+  reflectionExpectedFiles,
+} from "./reflection-exchange.js";
+import {
+  reflectionIndexEntry,
+  reflectionIndexSection,
+  reflectionPagePath,
+  renderReflectionBody,
+} from "./reflection-page.js";
+import {
+  type WikiReflectionFile,
+  type WikiReflectionReport,
+  type WikiReflectionResult,
+  type WikiReflectionResultPage,
+  buildWikiReflectionReport,
+  parseWikiReflectionReport,
+  parseWikiReflectionResultForTask,
+} from "./reflection-result.js";
 import {
   WikiCandidateValidationError,
   type WikiPathExpectation,
@@ -41,6 +95,7 @@ import {
 } from "./transaction.js";
 
 export {
+  buildWikiAnswerControlTask,
   parseWikiAnswerResult,
   parseWikiAnswerTask,
   wikiAnswerResultJsonSchema,
@@ -55,6 +110,35 @@ export type {
   WikiAnswerTaskContext,
   WikiAnswerTaskEvidence,
 } from "./answer-exchange.js";
+export {
+  parseWikiMemoryContext,
+  parseWikiMemoryComparisonJudgmentInput,
+  parseWikiMemoryEvaluationInput,
+  parseWikiMemoryEvaluationRecord,
+  wikiMemoryContextSchemaVersion,
+  wikiMemoryEvaluationSchemaVersion,
+  wikiMemoryInstruction,
+  wikiMemoryKinds,
+} from "./memory.js";
+export type {
+  WikiMemoryAssessmentInput,
+  WikiMemoryComparisonEvidence,
+  WikiMemoryComparisonJudgmentInput,
+  WikiMemoryComparisonPreference,
+  WikiMemoryContext,
+  WikiMemoryEvaluationAssessment,
+  WikiMemoryEvaluationCounts,
+  WikiMemoryEvaluationInput,
+  WikiMemoryEvaluationMode,
+  WikiMemoryEvaluationRecord,
+  WikiMemoryEvaluationSummary,
+  WikiMemoryKind,
+  WikiMemoryMatch,
+  WikiMemoryPageEvaluationSummary,
+  WikiMemoryReference,
+  WikiMemoryTaskOutcome,
+  WikiMemoryVerdict,
+} from "./memory.js";
 export {
   parseWikiRebuildReport,
   parseWikiRebuildResult,
@@ -76,6 +160,41 @@ export type {
   WikiRebuildTarget,
   WikiRebuildTask,
 } from "./rebuild-exchange.js";
+export type {
+  WikiRebuildDocumentBlock,
+  WikiRebuildDocumentClaim,
+  WikiRebuildDocumentResultPage,
+  WikiRebuildDocumentSection,
+} from "./rebuild-document.js";
+export {
+  parseWikiReflectionTask,
+  parseWikiReflectionTaskInput,
+  wikiReflectionTaskSchemaVersion,
+} from "./reflection-exchange.js";
+export type {
+  PrepareWikiReflectionTaskInput,
+  WikiReflectionEvidence,
+  WikiReflectionTask,
+  WikiReflectionTaskContext,
+} from "./reflection-exchange.js";
+export {
+  parseWikiReflectionReport,
+  parseWikiReflectionResult,
+  parseWikiReflectionResultForTask,
+  wikiReflectionReportSchemaVersion,
+  wikiReflectionResultJsonSchema,
+  wikiReflectionResultSchemaVersion,
+} from "./reflection-result.js";
+export type {
+  WikiReflectionDecisionPage,
+  WikiReflectionFailurePage,
+  WikiReflectionFile,
+  WikiReflectionIssue,
+  WikiReflectionPlaybookPage,
+  WikiReflectionReport,
+  WikiReflectionResult,
+  WikiReflectionResultPage,
+} from "./reflection-result.js";
 
 export {
   WikiCandidateValidationError,
@@ -124,6 +243,7 @@ export interface WikiPageMetadata {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly reviewAfter?: string;
+  readonly retrievalTerms?: readonly string[];
   readonly sources: readonly string[];
 }
 
@@ -163,6 +283,26 @@ export interface WikiApplyResult {
   readonly proposalId: string;
   readonly files: readonly string[];
   readonly lint: WikiLintReport;
+}
+
+export interface WikiRebuildApplyResult {
+  readonly reportId: string;
+  readonly files: readonly string[];
+  readonly lint: WikiLintReport;
+}
+
+export interface WikiReflectionApplyResult {
+  readonly reportId: string;
+  readonly files: readonly string[];
+  readonly lint: WikiLintReport;
+}
+
+export interface RecordWikiMemoryComparisonInput {
+  readonly task: unknown;
+  readonly controlTask: unknown;
+  readonly memoryResult: unknown;
+  readonly controlResult: unknown;
+  readonly judgment: unknown;
 }
 
 export interface RecordWikiRunInput {
@@ -217,6 +357,36 @@ export interface WikiApproval {
   readonly accepted: true;
   readonly reviewedBy: string;
   readonly reviewedAt: string;
+}
+
+export interface WikiRebuildApproval {
+  readonly reportId: string;
+  readonly digest: string;
+  readonly accepted: true;
+  readonly reviewedBy: string;
+  readonly reviewedAt: string;
+}
+
+export interface WikiReflectionApproval {
+  readonly reportId: string;
+  readonly digest: string;
+  readonly accepted: true;
+  readonly reviewedBy: string;
+  readonly reviewedAt: string;
+}
+
+export interface ApplyWikiRebuildInput {
+  readonly task: unknown;
+  readonly result: unknown;
+  readonly report: unknown;
+  readonly approval: WikiRebuildApproval;
+}
+
+export interface ApplyWikiReflectionInput {
+  readonly task: unknown;
+  readonly result: unknown;
+  readonly report: unknown;
+  readonly approval: WikiReflectionApproval;
 }
 
 interface WikiAnswerDraft {
@@ -330,6 +500,32 @@ export async function prepareWikiQuery(
   );
 }
 
+export async function prepareWikiMemoryContext(
+  workspace: Workspace,
+  query: string,
+  now: Date = new Date(),
+): Promise<WikiMemoryContext> {
+  const snapshot = { query, now: new Date(now.getTime()) };
+  return withWikiWriteLock(workspace, (locked) =>
+    prepareWikiMemoryContextLocked(locked, snapshot.query, snapshot.now),
+  );
+}
+
+export async function validateCurrentWikiMemoryContext(
+  workspace: Workspace,
+  value: unknown,
+  now: Date = new Date(),
+): Promise<WikiMemoryContext> {
+  const context = parseWikiMemoryContext(value);
+  return withWikiWriteLock(workspace, async (locked) => {
+    const memories = await wikiMemoryMatches(locked, context.query, new Date(now.getTime()));
+    if (JSON.stringify(memories) !== JSON.stringify(context.memories)) {
+      throw new Error("Wiki memory context is stale");
+    }
+    return context;
+  });
+}
+
 export async function prepareWikiEvolve(workspace: Workspace): Promise<WikiTaskPacket> {
   const [pages, report, runs] = await Promise.all([
     listWikiPages(workspace),
@@ -337,6 +533,81 @@ export async function prepareWikiEvolve(workspace: Workspace): Promise<WikiTaskP
     recentRunFiles(workspace),
   ]);
   return validatedTaskPacket(workspace, evolvePacket(workspace, pages, report, runs));
+}
+
+export async function prepareWikiReflectionTask(
+  workspace: Workspace,
+  inputValue: unknown,
+): Promise<WikiReflectionTask> {
+  const input = parseWikiReflectionTaskInput(inputValue);
+  const contexts = await readWikiContextFiles(workspace, reflectionContextFiles(input));
+  const evidence = reflectionEvidence(input, contexts);
+  return buildWikiReflectionTask({
+    evidence,
+    feedback: input.feedback,
+    validation: input.validation,
+    changedFiles: input.changedFiles,
+    contexts,
+    expectedFiles: reflectionExpectedFiles(),
+    constraints: reflectionConstraints(),
+  });
+}
+
+export async function validateCurrentWikiReflectionTask(
+  workspace: Workspace,
+  taskValue: unknown,
+): Promise<WikiReflectionTask> {
+  const task = parseWikiReflectionTask(taskValue);
+  await assertWikiReflectionTaskCurrent(workspace, task);
+  return task;
+}
+
+async function assertWikiReflectionTaskCurrent(
+  workspace: Workspace,
+  task: WikiReflectionTask,
+): Promise<void> {
+  const contexts = await readWikiContextFiles(
+    workspace,
+    task.contexts.map(({ path }) => path),
+  );
+  if (JSON.stringify(contexts) !== JSON.stringify(task.contexts)) {
+    throw new Error("Wiki reflection task contexts changed after preparation");
+  }
+}
+
+export async function prepareWikiReflectionReport(
+  workspace: Workspace,
+  taskValue: unknown,
+  resultValue: unknown,
+  now: Date = new Date(),
+): Promise<WikiReflectionReport> {
+  const task = parseWikiReflectionTask(taskValue);
+  const result = parseWikiReflectionResultForTask(task, resultValue);
+  const generatedAt = new Date(now.getTime());
+  return withWikiWriteLock(workspace, (locked) =>
+    prepareWikiReflectionReportLocked(locked, task, result, generatedAt),
+  );
+}
+
+export async function applyWikiReflection(
+  workspace: Workspace,
+  input: ApplyWikiReflectionInput,
+  now: Date = new Date(),
+): Promise<WikiReflectionApplyResult> {
+  const snapshot = wikiReflectionApplicationSnapshot(input, now);
+  validateWikiReflectionApproval(snapshot.report, snapshot.approval);
+  return withWikiWriteLock(workspace, (locked) => applyReviewedWikiReflection(locked, snapshot));
+}
+
+function wikiReflectionApplicationSnapshot(input: ApplyWikiReflectionInput, now: Date) {
+  const task = parseWikiReflectionTask(input.task);
+  return {
+    task,
+    result: parseWikiReflectionResultForTask(task, input.result),
+    report: parseWikiReflectionReport(input.report),
+    approval: structuredClone(input.approval),
+    now: new Date(now.getTime()),
+  };
 }
 
 export async function prepareWikiRebuildTask(
@@ -374,6 +645,27 @@ export async function prepareWikiRebuildReport(
   );
 }
 
+export async function applyWikiRebuild(
+  workspace: Workspace,
+  input: ApplyWikiRebuildInput,
+  now: Date = new Date(),
+): Promise<WikiRebuildApplyResult> {
+  const snapshot = wikiRebuildApplicationSnapshot(input, now);
+  validateWikiRebuildApproval(snapshot.report, snapshot.approval);
+  return withWikiWriteLock(workspace, (locked) => applyReviewedWikiRebuild(locked, snapshot));
+}
+
+function wikiRebuildApplicationSnapshot(input: ApplyWikiRebuildInput, now: Date) {
+  const task = parseWikiRebuildTask(input.task);
+  return {
+    task,
+    result: parseWikiRebuildResultForTask(task, input.result),
+    report: parseWikiRebuildReport(input.report),
+    approval: structuredClone(input.approval),
+    now: new Date(now.getTime()),
+  };
+}
+
 export async function prepareWikiAnswerTask(
   workspace: Workspace,
   input: PrepareWikiAnswerTaskInput,
@@ -398,18 +690,33 @@ async function prepareWikiAnswerTaskLocked(
   input: PrepareWikiAnswerTaskInput,
 ): Promise<WikiAnswerTask> {
   await assertInitializedWiki(workspace);
-  const packet = await prepareWikiQuery(workspace, input.question);
-  const evidence = await answerTaskEvidence(workspace, input.sourceIds);
-  const contexts = await readWikiContextFiles(workspace, [
-    ...packet.contextFiles,
-    ...evidence.map((source) => source.path),
+  const [packet, evidence, memories] = await Promise.all([
+    prepareWikiQuery(workspace, input.question),
+    answerTaskEvidence(workspace, input.sourceIds),
+    wikiMemoryMatches(workspace, input.question, new Date()),
   ]);
   return buildWikiAnswerTask({
     ...input,
-    instructions: [packet.prompt, ...packet.constraints],
-    contexts,
+    instructions: answerTaskInstructions(packet, memories),
+    contexts: await readWikiContextFiles(workspace, [
+      ...packet.contextFiles,
+      ...memories.map(({ path }) => path),
+      ...evidence.map((source) => source.path),
+    ]),
     evidence,
+    memories: memories.map(wikiMemoryReference),
   });
+}
+
+function answerTaskInstructions(
+  packet: WikiTaskPacket,
+  memories: readonly WikiMemoryMatch[],
+): string[] {
+  return [
+    packet.prompt,
+    ...packet.constraints,
+    ...(memories.length === 0 ? [] : [wikiMemoryInstruction]),
+  ];
 }
 
 export async function prepareWikiAnswerProposal(
@@ -488,6 +795,140 @@ export async function recordWikiRun(
   const snapshot = { input: structuredClone(input), now: new Date(now.getTime()) };
   return withWikiWriteLock(workspace, (locked) =>
     recordWikiRunUnlocked(locked, snapshot.input, snapshot.now),
+  );
+}
+
+export async function recordWikiMemoryEvaluation(
+  workspace: Workspace,
+  taskValue: unknown,
+  inputValue: unknown,
+  now: Date = new Date(),
+): Promise<WikiMemoryEvaluationRecord> {
+  const task = parseWikiAnswerTask(taskValue);
+  const evaluation = parseWikiMemoryEvaluationInput(inputValue);
+  if (task.memories.length === 0) {
+    throw new Error("Wiki answer task selected no memories to evaluate");
+  }
+  const record = buildWikiMemoryEvaluationRecord({
+    taskId: task.id,
+    taskDigest: task.digest,
+    query: task.question,
+    memories: task.memories,
+    evaluation,
+    recordedAt: new Date(now.getTime()).toISOString(),
+  });
+  return withWikiWriteLock(workspace, (locked) => recordWikiMemoryEvaluationLocked(locked, record));
+}
+
+export async function prepareWikiMemoryControlTask(
+  workspace: Workspace,
+  taskValue: unknown,
+): Promise<WikiAnswerTask> {
+  const task = parseWikiAnswerTask(taskValue);
+  return withWikiWriteLock(workspace, async (locked) => {
+    await assertAnswerTaskCurrent(locked, task);
+    return buildWikiAnswerControlTask(task);
+  });
+}
+
+export async function recordWikiMemoryComparison(
+  workspace: Workspace,
+  input: RecordWikiMemoryComparisonInput,
+  now: Date = new Date(),
+): Promise<WikiMemoryEvaluationRecord> {
+  const snapshot = memoryComparisonSnapshot(input, now);
+  return withWikiWriteLock(workspace, async (locked) => {
+    await assertAnswerTaskCurrent(locked, snapshot.task);
+    assertExpectedMemoryControl(snapshot.task, snapshot.controlTask);
+    const record = buildMemoryComparisonRecord(snapshot);
+    return recordWikiMemoryEvaluationLocked(locked, record);
+  });
+}
+
+function memoryComparisonSnapshot(input: RecordWikiMemoryComparisonInput, now: Date) {
+  const task = parseWikiAnswerTask(input.task);
+  const controlTask = parseWikiAnswerTask(input.controlTask);
+  return {
+    task,
+    controlTask,
+    memoryResult: parseWikiAnswerResultForTask(task, input.memoryResult),
+    controlResult: parseWikiAnswerResultForTask(controlTask, input.controlResult),
+    judgment: parseWikiMemoryComparisonJudgmentInput(input.judgment),
+    recordedAt: new Date(now.getTime()).toISOString(),
+  };
+}
+
+function buildMemoryComparisonRecord(
+  snapshot: ReturnType<typeof memoryComparisonSnapshot>,
+): WikiMemoryEvaluationRecord {
+  return buildWikiMemoryEvaluationRecord({
+    taskId: snapshot.task.id,
+    taskDigest: snapshot.task.digest,
+    query: snapshot.task.question,
+    memories: snapshot.task.memories,
+    evaluation: comparisonEvaluation(snapshot.judgment),
+    comparison: comparisonEvidence(
+      snapshot.controlTask,
+      snapshot.memoryResult,
+      snapshot.controlResult,
+      snapshot.judgment,
+    ),
+    recordedAt: snapshot.recordedAt,
+  });
+}
+
+function assertExpectedMemoryControl(task: WikiAnswerTask, controlTask: WikiAnswerTask): void {
+  const expected = buildWikiAnswerControlTask(task);
+  if (controlTask.id !== expected.id || controlTask.digest !== expected.digest) {
+    throw new Error("Wiki memory control task does not match the selected-memory task");
+  }
+}
+
+function comparisonEvaluation(
+  judgment: WikiMemoryComparisonJudgmentInput,
+): ReturnType<typeof parseWikiMemoryEvaluationInput> {
+  const input = {
+    taskOutcome: comparisonOutcome(judgment.preference),
+    assessments: judgment.assessments,
+  };
+  return parseWikiMemoryEvaluationInput(
+    judgment.note === undefined ? input : { ...input, note: judgment.note },
+  );
+}
+
+function comparisonEvidence(
+  controlTask: WikiAnswerTask,
+  memoryResult: WikiAnswerResult,
+  controlResult: WikiAnswerResult,
+  judgment: WikiMemoryComparisonJudgmentInput,
+): WikiMemoryComparisonEvidence {
+  return {
+    controlTaskId: controlTask.id,
+    controlTaskDigest: controlTask.digest,
+    memoryResultSha256: answerResultSha256(memoryResult),
+    controlResultSha256: answerResultSha256(controlResult),
+    preference: judgment.preference,
+  };
+}
+
+function answerResultSha256(result: WikiAnswerResult): string {
+  return sha256(
+    JSON.stringify({
+      schemaVersion: result.schemaVersion,
+      taskId: result.taskId,
+      taskDigest: result.taskDigest,
+      question: result.question,
+      summary: result.summary,
+      acceptedClaims: result.acceptedClaims.map(({ text, sourceId }) => ({ text, sourceId })),
+    }),
+  );
+}
+
+export async function summarizeWikiMemoryEvaluations(
+  workspace: Workspace,
+): Promise<WikiMemoryEvaluationSummary> {
+  return withWikiWriteLock(workspace, async (locked) =>
+    summarizeWikiMemoryEvaluationRecords(await wikiMemoryEvaluationRecords(locked)),
   );
 }
 
@@ -777,7 +1218,7 @@ function rebuildTargets(
 
 function rebuildTargetPage(page: WikiPage, sources: ReadonlySet<string>): boolean {
   return (
-    (page.metadata.kind === "source" || page.metadata.kind === "concept") &&
+    ["source", "concept", "synthesis"].includes(page.metadata.kind) &&
     page.metadata.sources.some((source) => sources.has(source))
   );
 }
@@ -787,7 +1228,7 @@ function rebuildTarget(workspace: Workspace, page: WikiPage): WikiRebuildTarget 
     path: relativeWikiPath(workspace, page.path),
     title: page.metadata.title,
     slug: page.metadata.slug,
-    kind: page.metadata.kind as "source" | "concept",
+    kind: page.metadata.kind as "source" | "concept" | "synthesis",
     status: page.metadata.status,
     createdAt: page.metadata.createdAt,
     baselineSha256: sha256(page.content),
@@ -798,13 +1239,10 @@ function rebuildTarget(workspace: Workspace, page: WikiPage): WikiRebuildTarget 
 }
 
 function assertRebuildTargetCoverage(targets: readonly WikiRebuildTarget[]): void {
-  if (
-    targets.length === 0 ||
-    targets.length > 10 ||
-    !targets.some((target) => target.kind === "source") ||
-    !targets.some((target) => target.kind === "concept")
-  ) {
-    throw new Error("Wiki rebuild v1 requires one to ten existing source and concept pages");
+  if (targets.length === 0 || targets.length > 10) {
+    throw new Error(
+      "Wiki rebuild requires one to ten existing source, concept, or synthesis pages",
+    );
   }
 }
 
@@ -812,8 +1250,13 @@ function rebuildInstructions(): string[] {
   return [
     "Use only the selected managed sources for accepted claims.",
     "Preserve distinct operating models, practices, risks, and tradeoffs before compression.",
-    "Write one concise summary, explicit accepted claims, and useful Wiki links per target.",
-    "Keep summary and claim text to one line each; put Wiki links only in the links field.",
+    "Separate source-backed facts into acceptedClaims and source-derived interpretations that still require project judgment into hypotheses.",
+    "Do not turn a hypothesis into an accepted claim; return an empty hypotheses list when none are warranted.",
+    "Write one concise summary, explicit typed claims, and useful Wiki links per target.",
+    "Keep summary, claim, and hypothesis text to one line each; put Wiki links only in the links field.",
+    "For synthesis targets, use document sections and typed blocks instead of flattening the page into an evidence summary.",
+    "Use paragraph, callout, list, subheading, and table blocks for explanation; use acceptedClaims, hypotheses, and links blocks for typed knowledge.",
+    "Do not put Markdown syntax in block text because the host renders the document structure.",
     "Return every target exactly once in canonical path order.",
     ...writingConstraints(),
     "Keep one main idea per sentence and split sentences that are hard to understand in one pass.",
@@ -834,6 +1277,74 @@ async function assertRebuildTaskCurrent(
   }
 }
 
+function validateWikiRebuildApproval(
+  report: WikiRebuildReport,
+  approval: WikiRebuildApproval,
+): void {
+  if (
+    approval.accepted !== true ||
+    approval.reportId !== report.id ||
+    approval.digest !== report.digest
+  ) {
+    throw new Error("Wiki rebuild approval does not match the reviewed report");
+  }
+  if (approval.reviewedBy.trim().length === 0 || !validIsoDate(approval.reviewedAt)) {
+    throw new Error("Wiki rebuild approval requires a reviewer and ISO review timestamp");
+  }
+  if (Date.parse(approval.reviewedAt) < Date.parse(report.generatedAt)) {
+    throw new Error("Wiki rebuild approval cannot predate the reviewed report");
+  }
+}
+
+async function applyReviewedWikiRebuild(
+  workspace: Workspace,
+  snapshot: {
+    readonly task: WikiRebuildTask;
+    readonly result: WikiRebuildResult;
+    readonly report: WikiRebuildReport;
+    readonly approval: WikiRebuildApproval;
+    readonly now: Date;
+  },
+): Promise<WikiRebuildApplyResult> {
+  await assertWikiRebuildNotApplied(workspace, snapshot.report.id);
+  const current = await currentWikiRebuildReport(workspace, snapshot);
+  if (current.candidateDiagnostics.issues.length > 0) {
+    throw new WikiCandidateValidationError(current.candidateDiagnostics);
+  }
+  const promoted = await promoteWikiFiles(workspace, {
+    files: current.files,
+    auditEntry: rebuildAuditEntry(snapshot.report, snapshot.approval, snapshot.now),
+    validate: lintWiki,
+    prePromote: async () => {
+      await currentWikiRebuildReport(workspace, snapshot);
+    },
+  });
+  return { reportId: snapshot.report.id, files: promoted.files, lint: promoted.lint };
+}
+
+async function currentWikiRebuildReport(
+  workspace: Workspace,
+  snapshot: {
+    readonly task: WikiRebuildTask;
+    readonly result: WikiRebuildResult;
+    readonly report: WikiRebuildReport;
+  },
+): Promise<WikiRebuildReport> {
+  const current = await prepareWikiRebuildReportLocked(workspace, snapshot.task, snapshot.result);
+  if (current.digest !== snapshot.report.digest) {
+    throw new Error("Wiki rebuild report is stale or does not match its task and result");
+  }
+  return current;
+}
+
+async function assertWikiRebuildNotApplied(workspace: Workspace, id: string): Promise<void> {
+  await assertWikiPath(workspace, { path: "log.md", type: "file", allowMissing: false });
+  const log = await readFile(wikiPath(workspace, "log.md"), "utf8");
+  if (log.includes(`rebuild | ${id} |`)) {
+    throw new Error(`Wiki rebuild report was already applied: ${id}`);
+  }
+}
+
 async function prepareWikiRebuildReportLocked(
   workspace: Workspace,
   task: WikiRebuildTask,
@@ -844,7 +1355,7 @@ async function prepareWikiRebuildReportLocked(
   const reports = await rebuildLintReports(workspace, files, task.generatedAt);
   const comparisons = await rebuildComparisons(workspace, files);
   return buildWikiRebuildReport({
-    schemaVersion: "ai-lab.wiki-rebuild-report.v1",
+    schemaVersion: wikiRebuildReportSchemaVersion,
     taskId: task.id,
     taskDigest: task.digest,
     generatedAt: task.generatedAt,
@@ -870,21 +1381,38 @@ function rebuildCandidateFile(
 ): WikiRebuildFile {
   const target = task.targets.find((candidate) => candidate.path === page.path);
   if (target === undefined) throw new Error("Wiki rebuild result target is missing");
-  const claims = page.acceptedClaims.map((claim) => rebuildClaim(task, claim));
+  const claims = rebuildResultClaims(page).map((claim) => rebuildClaim(task, claim));
   const metadata = rebuildMetadata(task, target, claims);
   return {
     path: target.path,
-    content: renderWikiPage(metadata, rebuildBody(page.summary, claims, page.links)),
+    content: renderWikiPage(metadata, rebuildResultBody(task, page, claims)),
   };
 }
 
-function rebuildClaim(
+function rebuildResultClaims(
+  page: WikiRebuildResult["pages"][number],
+): readonly WikiRebuildDocumentClaim[] {
+  return page.format === "document" ? documentClaims(page) : page.acceptedClaims;
+}
+
+function rebuildResultBody(
   task: WikiRebuildTask,
-  claim: WikiRebuildResult["pages"][number]["acceptedClaims"][number],
-): WikiAcceptedClaim {
-  const source = task.evidence.find((candidate) => candidate.id === claim.sourceId);
+  page: WikiRebuildResult["pages"][number],
+  claims: readonly WikiAcceptedClaim[],
+): string {
+  return page.format === "document"
+    ? renderWikiRebuildDocument(page, (sourceId) => rebuildSourcePath(task, sourceId))
+    : rebuildBody(page.summary, claims, page.hypotheses, page.links);
+}
+
+function rebuildClaim(task: WikiRebuildTask, claim: WikiRebuildDocumentClaim): WikiAcceptedClaim {
+  return { text: claim.text, source: rebuildSourcePath(task, claim.sourceId) };
+}
+
+function rebuildSourcePath(task: WikiRebuildTask, sourceId: string): string {
+  const source = task.evidence.find((candidate) => candidate.id === sourceId);
   if (source === undefined) throw new Error("Wiki rebuild result cites an unknown source id");
-  return { text: claim.text, source: source.path };
+  return source.path;
 }
 
 function rebuildMetadata(
@@ -909,10 +1437,17 @@ function rebuildMetadata(
 function rebuildBody(
   summary: string,
   claims: readonly WikiAcceptedClaim[],
+  hypotheses: readonly string[],
   links: readonly string[],
 ): string {
+  const notes =
+    hypotheses.length === 0
+      ? ""
+      : `\n\n## Application Notes\n\n${hypotheses
+          .map((hypothesis) => `- hypothesis: ${hypothesis}`)
+          .join("\n")}`;
   const renderedLinks = links.map((link) => `- [[${link}]]`).join("\n");
-  return `## Summary\n\n${summary.trim()}\n\n## Key Claims\n\n${answerClaims(claims)}\n\n## Links\n\n${renderedLinks}\n`;
+  return `## Summary\n\n${summary.trim()}\n\n## Key Claims\n\n${answerClaims(claims)}${notes}\n\n## Links\n\n${renderedLinks}\n`;
 }
 
 async function rebuildLintReports(
@@ -977,6 +1512,8 @@ function compareRebuildPages(
     baselineSha256: sha256(baseline.content),
     candidateSha256: sha256(candidate.content),
     ...compareRebuildClaims(baseline, candidate),
+    ...compareRebuildHypotheses(baseline, candidate),
+    ...compareRebuildSections(baseline, candidate),
     ...compareRebuildLinks(baseline, candidate),
     ...compareRebuildSources(baseline, candidate),
   };
@@ -994,6 +1531,19 @@ function compareRebuildClaims(baseline: WikiPage, candidate: WikiPage) {
   };
 }
 
+function compareRebuildHypotheses(baseline: WikiPage, candidate: WikiPage) {
+  const baselineHypotheses = rebuildHypotheses(baseline);
+  const candidateHypotheses = rebuildHypotheses(candidate);
+  const retained = retainedClaimCount(baselineHypotheses, candidateHypotheses);
+  return {
+    baselineHypothesisCount: baselineHypotheses.length,
+    candidateHypothesisCount: candidateHypotheses.length,
+    retainedHypothesisCount: retained,
+    missingHypotheses: textDifference(baselineHypotheses, candidateHypotheses),
+    addedHypotheses: textDifference(candidateHypotheses, baselineHypotheses),
+  };
+}
+
 function compareRebuildLinks(baseline: WikiPage, candidate: WikiPage) {
   const baselineLinks = unique(wikiLinks(baseline.content)).sort();
   const candidateLinks = unique(wikiLinks(candidate.content)).sort();
@@ -1003,6 +1553,25 @@ function compareRebuildLinks(baseline: WikiPage, candidate: WikiPage) {
     missingLinks: stringDifference(baselineLinks, candidateLinks),
     addedLinks: stringDifference(candidateLinks, baselineLinks),
   };
+}
+
+function compareRebuildSections(baseline: WikiPage, candidate: WikiPage) {
+  const baselineSections = wikiSections(baseline.content);
+  const candidateSections = wikiSections(candidate.content);
+  return {
+    baselineSections,
+    candidateSections,
+    missingSections: stringDifference(baselineSections, candidateSections),
+    addedSections: stringDifference(candidateSections, baselineSections),
+  };
+}
+
+function wikiSections(content: string): string[] {
+  const sections = content
+    .split("\n")
+    .map((line) => /^##[ \t]+(.+?)[ \t]*#*[ \t]*$/.exec(line)?.[1]?.trim())
+    .filter((section): section is string => section !== undefined && section.length > 0);
+  return unique(sections).sort();
 }
 
 function compareRebuildSources(baseline: WikiPage, candidate: WikiPage) {
@@ -1018,6 +1587,16 @@ function compareRebuildSources(baseline: WikiPage, candidate: WikiPage) {
 function rebuildClaims(page: WikiPage): (WikiRebuildClaim & { identity: string })[] {
   return acceptedClaimRecords(page)
     .map((claim) => ({ text: claim.text, source: claim.source, identity: claim.identity }))
+    .sort((left, right) => left.identity.localeCompare(right.identity));
+}
+
+function rebuildHypotheses(page: WikiPage): { text: string; identity: string }[] {
+  return page.content
+    .split("\n")
+    .flatMap((line) => {
+      const text = /^\s*-\s+hypothesis:\s*(.+)$/.exec(line)?.[1];
+      return text === undefined ? [] : [{ text, identity: normalizeClaim(text) }];
+    })
     .sort((left, right) => left.identity.localeCompare(right.identity));
 }
 
@@ -1037,6 +1616,17 @@ function claimDifference(
   return left
     .filter((claim) => !consumeIdentity(remaining, claim.identity))
     .map(({ text, source }) => ({ text, source }));
+}
+
+function textDifference(
+  left: readonly { text: string; identity: string }[],
+  right: readonly { identity: string }[],
+): string[] {
+  const remaining = identityCounts(right);
+  return left
+    .filter((item) => !consumeIdentity(remaining, item.identity))
+    .map(({ text }) => text)
+    .sort();
 }
 
 function identityCounts(claims: readonly { identity: string }[]): Map<string, number> {
@@ -1208,10 +1798,57 @@ function evolveConstraints(): string[] {
   ];
 }
 
+async function prepareWikiMemoryContextLocked(
+  workspace: Workspace,
+  query: string,
+  now: Date,
+): Promise<WikiMemoryContext> {
+  await assertInitializedWiki(workspace);
+  return buildWikiMemoryContext({
+    query,
+    preparedAt: now.toISOString(),
+    memories: await wikiMemoryMatches(workspace, query, now),
+  });
+}
+
+async function wikiMemoryMatches(
+  workspace: Workspace,
+  query: string,
+  now: Date,
+): Promise<WikiMemoryMatch[]> {
+  const pages = await listWikiPages(workspace);
+  return selectWikiMemories(
+    pages.map((page) => memoryPageCandidate(workspace, page)),
+    query,
+    now,
+  );
+}
+
+function memoryPageCandidate(workspace: Workspace, page: WikiPage): WikiMemoryPageCandidate {
+  const candidate = {
+    path: relativeWikiPath(workspace, page.path),
+    title: page.metadata.title,
+    slug: page.metadata.slug,
+    kind: page.metadata.kind,
+    status: page.metadata.status,
+    content: page.content,
+  };
+  const withTerms =
+    page.metadata.retrievalTerms === undefined
+      ? candidate
+      : { ...candidate, retrievalTerms: page.metadata.retrievalTerms };
+  return page.metadata.reviewAfter === undefined
+    ? withTerms
+    : { ...withTerms, reviewAfter: page.metadata.reviewAfter };
+}
+
 async function selectQueryPages(workspace: Workspace, question: string): Promise<WikiPage[]> {
   const pages = await listWikiPages(workspace);
   const tokens = queryTokens(question);
-  return pages.filter((page) => pageMatches(page, tokens)).slice(0, 5);
+  return pages
+    .filter((page) => !["playbook", "failure", "decision"].includes(page.metadata.kind))
+    .filter((page) => pageMatches(page, tokens))
+    .slice(0, 5);
 }
 
 function queryTokens(question: string): string[] {
@@ -1239,6 +1876,285 @@ async function recentRunFiles(workspace: Workspace): Promise<string[]> {
     paths.map((path) => assertWikiPath(workspace, { path, type: "file", allowMissing: false })),
   );
   return paths;
+}
+
+function reflectionContextFiles(input: PrepareWikiReflectionTaskInput): string[] {
+  return input.runId === undefined
+    ? ["schema.md", "index.md"]
+    : ["schema.md", "index.md", `raw/runs/${input.runId}.json`];
+}
+
+function reflectionEvidence(
+  input: PrepareWikiReflectionTaskInput,
+  contexts: readonly { path: string; sha256: string }[],
+): WikiReflectionEvidence {
+  if (input.runId === undefined) {
+    return { kind: "provided-summary", summary: input.runSummary };
+  }
+  const path = `raw/runs/${input.runId}.json`;
+  const context = contexts.find((candidate) => candidate.path === path);
+  if (context === undefined) {
+    throw new Error(`Wiki reflection run not found: ${input.runId}`);
+  }
+  return { kind: "recorded-run", id: input.runId, path, sha256: context.sha256 };
+}
+
+function reflectionConstraints(): string[] {
+  return [
+    ...writingConstraints(),
+    "Redact secrets, tokens, environment values, private data, and long command output.",
+    "Do not copy a transcript or raw run details into durable memory.",
+    "Ground observed events in the supplied run, feedback, and validation.",
+    "Keep inferred causes, hypotheses, and generalizations separate from observed facts.",
+    "Do not cite raw/runs as a durable public source or add it to page frontmatter.",
+    "Do not modify raw/sources, raw/runs, AGENTS.md, SOUL.md, docs, index.md, or log.md.",
+    "Prepare no more than one coherent failure, playbook, or decision candidate.",
+    "Do not write the live wiki; a validated report and exact human digest approval must promote it.",
+  ];
+}
+
+async function prepareWikiReflectionReportLocked(
+  workspace: Workspace,
+  task: WikiReflectionTask,
+  result: WikiReflectionResult,
+  generatedAt: Date,
+): Promise<WikiReflectionReport> {
+  await assertWikiReflectionTaskCurrent(workspace, task);
+  const files = await reflectionCandidateFiles(workspace, result, generatedAt);
+  const reports = await reflectionLintReports(workspace, files, generatedAt);
+  return buildWikiReflectionReport({
+    taskId: task.id,
+    taskDigest: task.digest,
+    generatedAt: generatedAt.toISOString(),
+    outcome: result.outcome,
+    rationale: result.rationale,
+    files,
+    baseHashes: await hashWikiFiles(workspace, reflectionBasePaths(files)),
+    baselineDiagnostics: reports.baseline,
+    candidateDiagnostics: reports.candidate,
+    introducedIssues: issueDifference(reports.candidate.issues, reports.baseline.issues),
+    resolvedIssues: issueDifference(reports.baseline.issues, reports.candidate.issues),
+  });
+}
+
+async function reflectionCandidateFiles(
+  workspace: Workspace,
+  result: WikiReflectionResult,
+  generatedAt: Date,
+): Promise<WikiReflectionFile[]> {
+  if (result.outcome === "skip") return [];
+  const pageFile = await reflectionPageFile(workspace, result.page, generatedAt);
+  return [
+    {
+      path: "index.md",
+      content: await indexWithReflection(workspace, pageFile.path, result.page),
+    },
+    pageFile,
+  ];
+}
+
+async function reflectionPageFile(
+  workspace: Workspace,
+  page: WikiReflectionResultPage,
+  generatedAt: Date,
+): Promise<WikiReflectionFile> {
+  const path = reflectionPagePath(page);
+  const existing = await optionalWikiPage(workspace, path);
+  assertReflectionTarget(page, existing);
+  return {
+    path,
+    content: renderWikiPage(
+      reflectionMetadata(page, existing, generatedAt),
+      renderReflectionBody(page),
+    ),
+  };
+}
+
+function assertReflectionTarget(
+  page: WikiReflectionResultPage,
+  existing: WikiPage | undefined,
+): void {
+  if (slugify(page.title) !== page.slug) {
+    throw new Error("Wiki reflection page slug must match its title");
+  }
+  if (
+    existing !== undefined &&
+    (existing.metadata.kind !== page.kind ||
+      existing.metadata.slug !== page.slug ||
+      existing.metadata.status !== "active")
+  ) {
+    throw new Error("Wiki reflection cannot overwrite an incompatible existing page");
+  }
+}
+
+function reflectionMetadata(
+  page: WikiReflectionResultPage,
+  existing: WikiPage | undefined,
+  generatedAt: Date,
+): WikiPageMetadata {
+  const timestamp = generatedAt.toISOString();
+  return {
+    title: page.title,
+    slug: page.slug,
+    kind: page.kind,
+    status: "active",
+    createdAt: existing?.metadata.createdAt ?? timestamp,
+    updatedAt: timestamp,
+    reviewAfter: new Date(generatedAt.getTime() + 180 * 86_400_000).toISOString(),
+    retrievalTerms: unique(page.retrievalTerms).sort((left, right) => left.localeCompare(right)),
+    sources: [],
+  };
+}
+
+async function indexWithReflection(
+  workspace: Workspace,
+  path: string,
+  page: WikiReflectionResultPage,
+): Promise<string> {
+  const index = await readFile(wikiPath(workspace, "index.md"), "utf8");
+  if (index.includes(`(${path})`)) return index;
+  const heading = `## ${reflectionIndexSection(page.kind)}`;
+  const entry = reflectionIndexEntry(page, path);
+  return insertIndexEntry(index, heading, entry);
+}
+
+function insertIndexEntry(index: string, heading: string, entry: string): string {
+  const span = indexSectionSpan(index, heading);
+  if (span === undefined) return `${index.trimEnd()}\n\n${heading}\n\n${entry}\n`;
+  const before = index.slice(0, span.end).trimEnd();
+  const after = index.slice(span.end).trimStart();
+  return after.length === 0 ? `${before}\n\n${entry}\n` : `${before}\n\n${entry}\n\n${after}`;
+}
+
+function indexSectionSpan(
+  index: string,
+  heading: string,
+): { readonly start: number; readonly end: number } | undefined {
+  const start = index.indexOf(heading);
+  if (start < 0) return undefined;
+  const next = index.indexOf("\n## ", start + heading.length);
+  const end = next < 0 ? index.length : next;
+  return { start, end };
+}
+
+async function reflectionLintReports(
+  workspace: Workspace,
+  files: readonly WikiReflectionFile[],
+  generatedAt: Date,
+) {
+  const baseline = portableWikiLintReport(workspace, await lintWiki(workspace, generatedAt));
+  if (files.length === 0) return { baseline, candidate: baseline };
+  const candidate = await previewWikiFiles(workspace, files, (preview) =>
+    lintWiki(preview, generatedAt),
+  );
+  return { baseline, candidate: portableWikiLintReport(workspace, candidate) };
+}
+
+function reflectionBasePaths(files: readonly WikiReflectionFile[]): string[] {
+  return unique(["schema.md", "index.md", ...files.map(({ path }) => path)]).sort();
+}
+
+function validateWikiReflectionApproval(
+  report: WikiReflectionReport,
+  approval: WikiReflectionApproval,
+): void {
+  if (
+    approval.accepted !== true ||
+    approval.reportId !== report.id ||
+    approval.digest !== report.digest
+  ) {
+    throw new Error("Wiki reflection approval does not match the reviewed report");
+  }
+  if (approval.reviewedBy.trim().length === 0 || !validIsoDate(approval.reviewedAt)) {
+    throw new Error("Wiki reflection approval requires a reviewer and ISO review timestamp");
+  }
+  if (Date.parse(approval.reviewedAt) < Date.parse(report.generatedAt)) {
+    throw new Error("Wiki reflection approval cannot predate the reviewed report");
+  }
+}
+
+async function applyReviewedWikiReflection(
+  workspace: Workspace,
+  snapshot: {
+    readonly task: WikiReflectionTask;
+    readonly result: WikiReflectionResult;
+    readonly report: WikiReflectionReport;
+    readonly approval: WikiReflectionApproval;
+    readonly now: Date;
+  },
+): Promise<WikiReflectionApplyResult> {
+  if (snapshot.report.outcome !== "propose") {
+    throw new Error("A skipped Wiki reflection cannot be applied");
+  }
+  await assertWikiReflectionNotApplied(workspace, snapshot.report.id);
+  const current = await currentWikiReflectionReport(workspace, snapshot);
+  if (current.candidateDiagnostics.issues.length > 0) {
+    throw new WikiCandidateValidationError(current.candidateDiagnostics);
+  }
+  return promoteWikiReflection(workspace, snapshot, current);
+}
+
+async function promoteWikiReflection(
+  workspace: Workspace,
+  snapshot: {
+    readonly task: WikiReflectionTask;
+    readonly result: WikiReflectionResult;
+    readonly report: WikiReflectionReport;
+    readonly approval: WikiReflectionApproval;
+    readonly now: Date;
+  },
+  current: WikiReflectionReport,
+): Promise<WikiReflectionApplyResult> {
+  const promoted = await promoteWikiFiles(workspace, {
+    files: current.files,
+    auditEntry: reflectionAuditEntry(snapshot.report, snapshot.approval, snapshot.now),
+    validate: lintWiki,
+    prePromote: async () => {
+      await currentWikiReflectionReport(workspace, snapshot);
+    },
+  });
+  return { reportId: current.id, files: promoted.files, lint: promoted.lint };
+}
+
+async function currentWikiReflectionReport(
+  workspace: Workspace,
+  snapshot: {
+    readonly task: WikiReflectionTask;
+    readonly result: WikiReflectionResult;
+    readonly report: WikiReflectionReport;
+  },
+): Promise<WikiReflectionReport> {
+  const current = await prepareWikiReflectionReportLocked(
+    workspace,
+    snapshot.task,
+    snapshot.result,
+    new Date(snapshot.report.generatedAt),
+  );
+  if (current.digest !== snapshot.report.digest) {
+    throw new Error("Wiki reflection report is stale or does not match its task and result");
+  }
+  return current;
+}
+
+async function assertWikiReflectionNotApplied(
+  workspace: Workspace,
+  reportId: string,
+): Promise<void> {
+  await assertWikiPath(workspace, { path: "log.md", type: "file", allowMissing: false });
+  const log = await readFile(wikiPath(workspace, "log.md"), "utf8");
+  if (log.includes(`reflection | ${reportId} |`)) {
+    throw new Error(`Wiki reflection report was already applied: ${reportId}`);
+  }
+}
+
+function reflectionAuditEntry(
+  report: WikiReflectionReport,
+  approval: WikiReflectionApproval,
+  appliedAt: Date,
+): string {
+  return `## [${appliedAt.toISOString()}] reflection | ${report.id} | digest=${
+    report.digest
+  } | reviewer=${auditValue(approval.reviewedBy)} | reviewedAt=${approval.reviewedAt}`;
 }
 
 function evolvePageFiles(
@@ -1271,6 +2187,7 @@ function wikiDirectories(workspace: Workspace): string[] {
   return [
     wikiPath(workspace, "raw", "sources"),
     wikiPath(workspace, "raw", "runs"),
+    wikiPath(workspace, "raw", "evals"),
     ...pageDirs.map((dir) => wikiPath(workspace, "pages", dir)),
   ];
 }
@@ -1290,6 +2207,7 @@ function wikiLayoutExpectations(allowMissing: boolean): WikiPathExpectation[] {
       "raw",
       "raw/sources",
       "raw/runs",
+      "raw/evals",
       "pages",
       ...pageDirs.map((dir) => `pages/${dir}`),
     ].map((path) => ({ path, type: "directory" as const, allowMissing })),
@@ -1498,6 +2416,44 @@ async function recordWikiRunUnlocked(
     `## [${now.toISOString()}] run | ${auditValue(input.task)} | ${id}`,
   );
   return { id, path, recordedAt: now.toISOString() };
+}
+
+async function recordWikiMemoryEvaluationLocked(
+  workspace: Workspace,
+  record: WikiMemoryEvaluationRecord,
+): Promise<WikiMemoryEvaluationRecord> {
+  await initWikiUnlocked(workspace);
+  await promoteManagedWikiFile(
+    workspace,
+    {
+      path: `raw/evals/${record.id}.json`,
+      content: `${JSON.stringify(record, null, 2)}\n`,
+    },
+    `## [${record.recordedAt}] memory-evaluation | ${record.id}`,
+  );
+  return record;
+}
+
+async function wikiMemoryEvaluationRecords(
+  workspace: Workspace,
+): Promise<WikiMemoryEvaluationRecord[]> {
+  await assertWikiPath(workspace, { path: "raw/evals", type: "directory", allowMissing: false });
+  const names = (await readdir(wikiPath(workspace, "raw", "evals")))
+    .filter((name) => name.endsWith(".json"))
+    .sort();
+  const contexts = await readWikiContextFiles(
+    workspace,
+    names.map((name) => `raw/evals/${name}`),
+  );
+  return contexts.map((context) => parseMemoryEvaluationJson(context.path, context.content));
+}
+
+function parseMemoryEvaluationJson(path: string, content: string): WikiMemoryEvaluationRecord {
+  try {
+    return parseWikiMemoryEvaluationRecord(JSON.parse(content));
+  } catch {
+    throw new Error(`Wiki memory evaluation artifact is invalid: ${path}`);
+  }
 }
 
 async function promoteManagedWikiFile(
@@ -1869,6 +2825,16 @@ function proposalAuditEntry(
   } | ${auditValue(proposal.note)}`;
 }
 
+function rebuildAuditEntry(
+  report: WikiRebuildReport,
+  approval: WikiRebuildApproval,
+  appliedAt: Date,
+): string {
+  return `## [${appliedAt.toISOString()}] rebuild | ${report.id} | digest=${
+    report.digest
+  } | reviewer=${auditValue(approval.reviewedBy)} | reviewedAt=${approval.reviewedAt}`;
+}
+
 function auditValue(value: string): string {
   return value
     .replace(/[\r\n|]+/g, " ")
@@ -1935,6 +2901,7 @@ async function pageIssues(
     ...staleTodoIssues(page),
     ...conflictedPageIssues(page),
     ...reviewPageIssues(page),
+    ...retrievalTermIssues(page),
     ...invalidReviewAfterIssues(page),
     ...staleReviewIssues(page, now),
     ...(await sourceReferenceIssues(workspace, page)),
@@ -1985,6 +2952,20 @@ function conflictedPageIssues(page: WikiPage): WikiLintIssue[] {
 function reviewPageIssues(page: WikiPage): WikiLintIssue[] {
   return page.metadata.status === "review"
     ? [issue("review-page", page.path, "Wiki page is waiting for human review")]
+    : [];
+}
+
+function retrievalTermIssues(page: WikiPage): WikiLintIssue[] {
+  return page.metadata.status === "active" &&
+    ["playbook", "failure", "decision"].includes(page.metadata.kind) &&
+    page.metadata.retrievalTerms === undefined
+    ? [
+        issue(
+          "missing-retrieval-terms",
+          page.path,
+          "Active reflection page requires reviewed retrievalTerms",
+        ),
+      ]
     : [];
 }
 
@@ -2055,7 +3036,7 @@ async function sourceReferenceIssue(
 }
 
 function orphanPageIssues(page: WikiPage, pages: readonly WikiPage[]): WikiLintIssue[] {
-  if (page.metadata.kind === "source" || page.metadata.kind === "question") {
+  if (!["concept", "entity", "synthesis"].includes(page.metadata.kind)) {
     return [];
   }
   return inboundLinks(page, pages) === 0
@@ -2164,9 +3145,12 @@ function frontmatter(content: string): string {
 }
 
 function parseMetadata(markdown: string): WikiPageMetadata {
+  return metadataWithOptionalFields(basePageMetadata(markdown), markdown);
+}
+
+function basePageMetadata(markdown: string): WikiPageMetadata {
   const map = frontmatterMap(markdown);
-  const reviewAfter = optional(map, "reviewAfter");
-  const metadata = {
+  return {
     title: required(map, "title"),
     slug: required(map, "slug"),
     kind: parseKind(required(map, "kind")),
@@ -2175,7 +3159,27 @@ function parseMetadata(markdown: string): WikiPageMetadata {
     updatedAt: required(map, "updatedAt"),
     sources: parseSources(markdown),
   };
-  return reviewAfter === undefined ? metadata : { ...metadata, reviewAfter };
+}
+
+function metadataWithOptionalFields(
+  metadata: WikiPageMetadata,
+  markdown: string,
+): WikiPageMetadata {
+  const reviewAfter = optional(frontmatterMap(markdown), "reviewAfter");
+  const retrievalTerms = validatedRetrievalTerms(parseFrontmatterList(markdown, "retrievalTerms"));
+  const withReview = reviewAfter === undefined ? metadata : { ...metadata, reviewAfter };
+  return retrievalTerms.length === 0 ? withReview : { ...withReview, retrievalTerms };
+}
+
+function validatedRetrievalTerms(terms: string[]): string[] {
+  if (
+    terms.length > 20 ||
+    new Set(terms).size !== terms.length ||
+    terms.some((term) => !boundedOneLine(term, 200))
+  ) {
+    throw new Error("Invalid retrievalTerms frontmatter");
+  }
+  return terms;
 }
 
 function frontmatterMap(markdown: string): Map<string, string> {
@@ -2189,7 +3193,11 @@ function frontmatterMap(markdown: string): Map<string, string> {
 }
 
 function parseSources(markdown: string): string[] {
-  const match = markdown.match(/^sources:\n((?:\s+- .+\n?)*)/m);
+  return parseFrontmatterList(markdown, "sources");
+}
+
+function parseFrontmatterList(markdown: string, field: string): string[] {
+  const match = markdown.match(new RegExp(`^${field}:\\n((?:\\s+- .+\\n?)*)`, "m"));
   return match?.[1]?.split("\n").flatMap(sourceLine) ?? [];
 }
 
@@ -2201,7 +3209,11 @@ function sourceLine(line: string): string[] {
 function renderFrontmatter(metadata: WikiPageMetadata): string {
   const reviewAfter =
     metadata.reviewAfter === undefined ? "" : `reviewAfter: ${metadata.reviewAfter}\n`;
-  return `title: ${metadata.title}\nslug: ${metadata.slug}\nkind: ${metadata.kind}\nstatus: ${metadata.status}\ncreatedAt: ${metadata.createdAt}\nupdatedAt: ${metadata.updatedAt}\n${reviewAfter}sources:\n${metadata.sources.map((source) => `  - ${source}`).join("\n")}\n`;
+  const retrievalTerms =
+    metadata.retrievalTerms === undefined
+      ? ""
+      : `retrievalTerms:\n${metadata.retrievalTerms.map((term) => `  - ${term}`).join("\n")}\n`;
+  return `title: ${metadata.title}\nslug: ${metadata.slug}\nkind: ${metadata.kind}\nstatus: ${metadata.status}\ncreatedAt: ${metadata.createdAt}\nupdatedAt: ${metadata.updatedAt}\n${reviewAfter}${retrievalTerms}sources:\n${metadata.sources.map((source) => `  - ${source}`).join("\n")}\n`;
 }
 
 function parseKind(value: string): WikiPageKind {
@@ -2243,7 +3255,7 @@ function schemaSeed(): string {
 function schemaSections(): string[] {
   return [
     "# Wiki Schema",
-    "## Role\n\nThe LLM agent proposes source-backed changes. For answer proposals, a trusted caller attests that a human reviewed the exact bytes; the package validates the attestation and current hashes but does not authenticate the reviewer.",
+    "## Role\n\nThe LLM agent prepares source-backed knowledge and evidence-bound reflections. A trusted caller attests that a human reviewed the exact proposal or report bytes; the package validates the attestation and current hashes but does not authenticate the reviewer.",
     schemaLayerRules(),
     schemaPageRules(),
     schemaWorkflowRules(),
@@ -2254,6 +3266,7 @@ function schemaLayerRules(): string {
   return [
     "## Layers",
     "- raw sources are immutable evidence under `raw/sources/`.",
+    "- raw memory evaluations are local observations under `raw/evals/`.",
     "- wiki pages are compiled markdown knowledge under `pages/`.",
     "- `index.md` is the content map and must be updated with page changes.",
     "- `log.md` is chronological, append-only, and written only by the wiki package.",
@@ -2264,10 +3277,13 @@ function schemaPageRules(): string {
   return [
     "## Page Rules",
     "- Use YAML frontmatter with title, slug, kind, status, createdAt, updatedAt, and sources.",
+    "- Active reflection pages also keep reviewed `retrievalTerms`. Use specific future task phrases and useful equivalents in other user languages; do not use generic kind names by themselves.",
     "- Use typed claims: accepted, hypothesis, or conflicted.",
+    "- Keep source-backed facts in accepted claims and interpretations that still require project judgment in hypothesis claims.",
     "- Every accepted claim must include a following source line.",
     "- A source path proves provenance, not truth. Accepted status requires review of the exact claim/source pair.",
     "- Keep each accepted claim distinct; do not duplicate the same claim/source pair across pages.",
+    "- Reflection pages keep `sources` empty because raw runs stay local; the task and report digests bind their evidence.",
     ...writingConstraints().map((constraint) => `- ${constraint}`),
     "- Keep one main idea per sentence. Split any sentence that is hard to understand in one pass.",
     "- Prefer wiki links like [[concept-slug]] for reusable concepts.",
@@ -2282,8 +3298,12 @@ function schemaWorkflowRules(): string {
     "Read index.md first, then relevant pages. Answer with citations to wiki pages or raw sources. Prepare reusable answers as proposals with explicit claim/source pairs. Do not promote them before approval.",
     "## Evolve",
     "Manual or automated agents read lint issues, recent runs, and candidate pages, then prepare small source-backed candidate updates. Evolve approval and promotion are not implemented yet.",
+    "## Reflect",
+    "Prepare a task from one explicit run or summary, feedback, validation, and changed files. Return a typed failure, playbook, decision, or skip result. The package renders and lints candidate Markdown. Promote it only after review of the exact report digest.",
+    "## Memory",
+    "Retrieve at most three relevant active playbook, failure, or decision pages whose review date has not expired. Score reviewed retrieval terms before title, slug, summary, and body terms. Treat memories as guidance, not factual evidence. The current request, explicit instructions, and source evidence take precedence. Bind selected paths, content hashes, scores, and matched terms to answer tasks. Store explicit post-task usefulness observations under `raw/evals/`. For stronger evidence, derive a digest-bound control task that differs only by removing memory, then bind both answer-result hashes and the human preference to a paired comparison record.",
     "## Lint",
-    "Check broken links, orphan pages, stale TODOs, unsupported sources, conflicted or review pages, duplicate slugs, duplicate accepted claims, stale active pages, and index drift.",
+    "Check broken links, orphan concept/entity/synthesis pages, stale TODOs, unsupported sources, conflicted or review pages, active reflection pages without retrieval terms, duplicate slugs, duplicate accepted claims, stale active pages, and index drift.",
   ].join("\n\n");
 }
 

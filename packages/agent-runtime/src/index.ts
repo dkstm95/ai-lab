@@ -8,12 +8,17 @@ import {
 import type { AgentRunRequest, AgentRunResult, ToolResult } from "@ai-lab/protocol";
 
 export { WikiAnswerWorkflow } from "./wiki-workflow.js";
+export { WikiMemoryWorkflow } from "./wiki-memory-workflow.js";
+export type { WikiMemoryComparisonRunInput } from "./wiki-memory-workflow.js";
 export { WikiRebuildWorkflow } from "./wiki-rebuild-workflow.js";
+export { WikiReflectionWorkflow } from "./wiki-reflection-workflow.js";
 export type {
   ApplyReviewedWikiProposalInput,
   WikiAnswerRunnerOptions,
   WikiAnswerRunnerResult,
 } from "./wiki-workflow.js";
+export type { ApplyReviewedWikiRebuildInput } from "./wiki-rebuild-workflow.js";
+export type { ApplyReviewedWikiReflectionInput } from "./wiki-reflection-workflow.js";
 export { externalRunnerFileSha256 } from "@ai-lab/model-providers";
 export type {
   ExternalRunnerConfig,
@@ -25,8 +30,18 @@ export type {
   WikiAnswerTask,
   WikiProposal,
   WikiRebuildReport,
+  WikiRebuildApplyResult,
   WikiRebuildResult,
   WikiRebuildTask,
+  WikiReflectionTask,
+  WikiReflectionReport,
+  WikiReflectionResult,
+  WikiReflectionApplyResult,
+  WikiMemoryContext,
+  WikiMemoryComparisonJudgmentInput,
+  WikiMemoryEvaluationInput,
+  WikiMemoryEvaluationRecord,
+  WikiMemoryEvaluationSummary,
 } from "@ai-lab/wiki";
 
 export interface AgentRuntime {

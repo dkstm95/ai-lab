@@ -73,21 +73,59 @@ run task
   -> retrieve relevant memory on the next task
 ```
 
-## First Implementation Unit
+## Reflection Workflow
 
-Start with `wiki.reflect.prepare`.
+The reflection flow uses provider-neutral JSON artifacts. It does not require a model API. The
+input contains exactly one recent run id or run summary, user feedback, validation, and changed
+files. `prepare` binds those values with the current `schema.md` and `index.md`.
 
-Inputs:
+The recorded-run form snapshots the selected `wiki/raw/runs/*.json` file and binds its hash. The
+summary form does not fabricate a raw run. Both forms preserve feedback, validation, and changed
+file names in the task digest, so another AI platform receives the same reviewed input.
 
-- recent run id or run summary
-- user feedback
-- validation result
-- changed files
+Create a private input artifact under `.ai-lab/wiki-exchange`, then prepare the task:
 
-Output:
+```json
+{
+  "runId": "2026-07-27T00-00-00-000Z-review-12345678",
+  "feedback": "Keep the memory scope requested by the user.",
+  "validation": "The response answered a different question.",
+  "changedFiles": ["packages/wiki/src/index.ts"]
+}
+```
 
-- a reflection task packet
-- expected files under `pages/failures`, `pages/playbooks`, or `pages/decisions`
-- constraints for redaction, source-backed claims, and no direct `AGENTS.md` edits
+```bash
+pnpm cli wiki reflect prepare \
+  --input reflection-input.json \
+  --out reflection-task.json
 
-Later additions can add memory proposal helpers, approval queues, and stronger retrieval.
+# Produce reflection-result.json with Codex or another platform, then:
+pnpm cli wiki reflect propose \
+  --task reflection-task.json \
+  --result reflection-result.json \
+  --out reflection-report.json
+pnpm cli wiki reflect review reflection-report.json
+pnpm cli wiki reflect apply reflection-report.json \
+  --task reflection-task.json \
+  --result reflection-result.json \
+  --reviewer "reviewer name" \
+  --accept-digest "<full reviewed digest>"
+```
+
+Use `runSummary` instead of `runId` when no raw run was retained. The exchange directory and
+artifacts are private local files. Inspect the task before giving it to Codex or another platform
+because a recorded-run task contains the selected raw run snapshot.
+
+The result is typed as `failure`, `playbook`, or `decision`; the host renders Markdown and
+frontmatter. `propose` previews full-Wiki lint without changing live files. `apply` accepts only the
+exact reviewed report digest, rechecks task context and candidate state, promotes the page and
+index atomically, and appends the audit log. A `skip` report records that no durable lesson exists
+and cannot be applied.
+
+## Retrieval and Evaluation
+
+Answer tasks automatically inject at most three relevant active memory pages. Selection, stale
+hash checks, reviewed multilingual retrieval terms, local usefulness observations, paired
+no-memory controls, CLI commands, and interpretation limits are defined in
+[`wiki-memory.md`](wiki-memory.md). One observation or comparison guides later review but does not
+prove that a memory caused an answer to improve.

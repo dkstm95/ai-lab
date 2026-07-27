@@ -4,13 +4,21 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { EchoTool } from "@ai-lab/local-tools";
 import { FakeModelProvider, ModelRouter, externalRunnerFileSha256 } from "@ai-lab/model-providers";
-import { addWikiSource, initWiki, prepareWikiQuery } from "@ai-lab/wiki";
+import {
+  addWikiSource,
+  initWiki,
+  prepareWikiQuery,
+  recordWikiRun,
+  renderWikiPage,
+} from "@ai-lab/wiki";
 import { createWorkspace } from "@ai-lab/workspace";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   DefaultAgentRuntime,
   type ExternalRunnerConfig,
   WikiAnswerWorkflow,
+  WikiMemoryWorkflow,
+  WikiReflectionWorkflow,
   createDefaultAgentRuntime,
 } from "../src/index.js";
 
@@ -90,6 +98,96 @@ describe("agent runtime", () => {
     );
     const query = await prepareWikiQuery(workspace, "durable knowledge");
     expect(query.contextFiles).toContain("pages/questions/what-is-durable-knowledge.md");
+  });
+
+  it("prepares and applies reviewed provider-neutral reflections without invoking a model", async () => {
+    const workspace = await wikiWorkspace();
+    const run = await recordWikiRun(workspace, {
+      task: "review",
+      input: "User correction",
+      output: "Validated correction",
+    });
+    const workflow = new WikiReflectionWorkflow(workspace);
+
+    const task = await workflow.prepareTask({
+      runId: run.id,
+      feedback: "Retain the correction.",
+      validation: "The correction applies to future reviews.",
+      changedFiles: ["packages/wiki/src/index.ts"],
+    });
+
+    expect(task.evidence).toMatchObject({ kind: "recorded-run", id: run.id });
+    await expect(workflow.validateTask(task)).resolves.toEqual(task);
+    const result = reflectionResult(task);
+    const report = await workflow.prepareReport(task, result, now());
+    await workflow.applyReviewed(
+      {
+        task,
+        result,
+        report,
+        acceptedDigest: report.digest,
+        reviewedBy: "Reviewer",
+        reviewedAt: new Date("2026-06-17T12:30:00.000Z"),
+      },
+      new Date("2026-06-17T13:00:00.000Z"),
+    );
+    await expect(
+      readFile(join(workspace.root, "wiki", "pages", "failures", "scope-mismatch.md"), "utf8"),
+    ).resolves.toContain("## Prevention Check");
+  });
+
+  it("retrieves reviewed memory and records a task-bound usefulness observation", async () => {
+    const workspace = await wikiWorkspace();
+    await writeMemoryPage(workspace.root);
+    const source = await addWikiSource(workspace, { path: "source.md", title: "Research" });
+    const memory = new WikiMemoryWorkflow(workspace);
+    const context = await memory.prepareContext("durable knowledge", now());
+    const task = await new WikiAnswerWorkflow(workspace).prepareTask({
+      question: "What is durable knowledge?",
+      sourceIds: [source.id],
+    });
+
+    expect(context.memories.map(({ path }) => path)).toEqual([
+      "pages/playbooks/durable-knowledge-review.md",
+    ]);
+    await expect(memory.validateContext(context, now())).resolves.toEqual(context);
+    expect(task.memories.map(({ path }) => path)).toEqual([
+      "pages/playbooks/durable-knowledge-review.md",
+    ]);
+    const selected = task.memories[0];
+    if (selected === undefined) throw new Error("Expected a selected memory");
+    await memory.recordEvaluation(
+      task,
+      {
+        taskOutcome: "improved",
+        assessments: [{ path: selected.path, verdict: "helpful" }],
+      },
+      now(),
+    );
+    await expect(memory.summarizeEvaluations()).resolves.toMatchObject({
+      evaluations: 1,
+      helpfulRate: 1,
+      counts: { improved: 1, helpful: 1 },
+    });
+    const control = await memory.prepareControlTask(task);
+    await memory.recordComparison(
+      {
+        task,
+        controlTask: control,
+        memoryResult: answerResult(task, source.id),
+        controlResult: answerResult(control, source.id),
+        judgment: {
+          preference: "tie",
+          assessments: [{ path: selected.path, verdict: "unused" }],
+        },
+      },
+      new Date("2026-06-17T13:00:00.000Z"),
+    );
+    await expect(memory.summarizeEvaluations()).resolves.toMatchObject({
+      evaluations: 2,
+      comparisons: 1,
+      counts: { tied: 1 },
+    });
   });
 
   it("returns a task-bound result without changing the live Wiki", async () => {
@@ -187,6 +285,27 @@ function answerResult(task: { id: string; digest: string; question: string }, so
   };
 }
 
+async function writeMemoryPage(root: string): Promise<void> {
+  await writeFile(
+    join(root, "wiki", "pages", "playbooks", "durable-knowledge-review.md"),
+    renderWikiPage(
+      {
+        title: "Durable Knowledge Review",
+        slug: "durable-knowledge-review",
+        kind: "playbook",
+        status: "active",
+        createdAt: "2026-06-17T12:00:00.000Z",
+        updatedAt: "2026-06-17T12:00:00.000Z",
+        reviewAfter: "2027-06-17T12:00:00.000Z",
+        retrievalTerms: ["durable knowledge review"],
+        sources: [],
+      },
+      "## Summary\n\nReview durable knowledge before reuse.\n\n## Links\n\n",
+    ),
+    "utf8",
+  );
+}
+
 function questionPath(root: string): string {
   return join(root, "wiki", "pages", "questions", "what-is-durable-knowledge.md");
 }
@@ -206,6 +325,29 @@ async function currentWikiFiles(root: string, evidencePath: string): Promise<str
   return Promise.all(
     ["index.md", "log.md", evidencePath].map((path) => readFile(join(root, "wiki", path), "utf8")),
   );
+}
+
+function reflectionResult(task: { id: string; digest: string }) {
+  return {
+    schemaVersion: "ai-lab.wiki-reflection-result.v2",
+    taskId: task.id,
+    taskDigest: task.digest,
+    outcome: "propose",
+    rationale: "The correction is reusable.",
+    page: {
+      kind: "failure",
+      title: "Scope Mismatch",
+      slug: "scope-mismatch",
+      summary: "Answer the requested scope.",
+      retrievalTerms: ["requested scope", "요청한 범위"],
+      failure: "The response answered a different scope.",
+      trigger: "A request can refer to more than one memory layer.",
+      correction: ["Restate the requested scope."],
+      preventionChecks: ["The response answers the stated scope."],
+      hypotheses: [],
+      links: [],
+    },
+  };
 }
 
 function now(): Date {

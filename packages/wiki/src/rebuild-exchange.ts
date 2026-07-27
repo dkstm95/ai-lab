@@ -1,8 +1,60 @@
 import { createHash } from "node:crypto";
+import {
+  type WikiRebuildDocumentResultPage,
+  assertWikiRebuildDocumentPage,
+  documentClaims,
+  documentLinks,
+  wikiRebuildDocumentPageJsonSchema,
+} from "./rebuild-document.js";
 
-export const wikiRebuildTaskSchemaVersion = "ai-lab.wiki-rebuild-task.v1";
-export const wikiRebuildResultSchemaVersion = "ai-lab.wiki-rebuild-result.v1";
-export const wikiRebuildReportSchemaVersion = "ai-lab.wiki-rebuild-report.v1";
+export const wikiRebuildTaskSchemaVersion = "ai-lab.wiki-rebuild-task.v3";
+export const wikiRebuildResultSchemaVersion = "ai-lab.wiki-rebuild-result.v3";
+export const wikiRebuildReportSchemaVersion = "ai-lab.wiki-rebuild-report.v4";
+
+const evidenceTextSchema = {
+  type: "string",
+  minLength: 1,
+  maxLength: 10_000,
+  pattern: "^[^\\r\\n]+$",
+  description: "One line of plain text without wiki-link syntax.",
+} as const;
+
+const wikiRebuildEvidencePageJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    path: { type: "string", minLength: 1, maxLength: 1_000 },
+    format: { const: "evidence" },
+    summary: { ...evidenceTextSchema, maxLength: 100_000 },
+    acceptedClaims: {
+      type: "array",
+      minItems: 1,
+      maxItems: 100,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          text: evidenceTextSchema,
+          sourceId: { type: "string", minLength: 1, maxLength: 500 },
+        },
+        required: ["text", "sourceId"],
+      },
+    },
+    hypotheses: {
+      type: "array",
+      maxItems: 100,
+      description:
+        "Source-derived interpretations that still require project judgment. Use an empty array when none are warranted.",
+      items: evidenceTextSchema,
+    },
+    links: {
+      type: "array",
+      maxItems: 100,
+      items: { type: "string", minLength: 1, maxLength: 500 },
+    },
+  },
+  required: ["path", "format", "summary", "acceptedClaims", "hypotheses", "links"],
+} as const;
 
 export const wikiRebuildResultJsonSchema = {
   type: "object",
@@ -16,44 +68,7 @@ export const wikiRebuildResultJsonSchema = {
       minItems: 1,
       maxItems: 10,
       items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          path: { type: "string", minLength: 1, maxLength: 1_000 },
-          summary: {
-            type: "string",
-            minLength: 1,
-            maxLength: 100_000,
-            pattern: "^[^\\r\\n]+$",
-            description: "One line of plain text without wiki-link syntax.",
-          },
-          acceptedClaims: {
-            type: "array",
-            minItems: 1,
-            maxItems: 100,
-            items: {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                text: {
-                  type: "string",
-                  minLength: 1,
-                  maxLength: 10_000,
-                  pattern: "^[^\\r\\n]+$",
-                  description: "One line of plain text without wiki-link syntax.",
-                },
-                sourceId: { type: "string", minLength: 1, maxLength: 500 },
-              },
-              required: ["text", "sourceId"],
-            },
-          },
-          links: {
-            type: "array",
-            maxItems: 100,
-            items: { type: "string", minLength: 1, maxLength: 500 },
-          },
-        },
-        required: ["path", "summary", "acceptedClaims", "links"],
+        oneOf: [wikiRebuildEvidencePageJsonSchema, wikiRebuildDocumentPageJsonSchema],
       },
     },
   },
@@ -75,7 +90,7 @@ export interface WikiRebuildTarget {
   readonly path: string;
   readonly title: string;
   readonly slug: string;
-  readonly kind: "source" | "concept";
+  readonly kind: "source" | "concept" | "synthesis";
   readonly status: "draft" | "active" | "review" | "superseded" | "conflicted";
   readonly createdAt: string;
   readonly reviewAfter?: string;
@@ -100,12 +115,16 @@ export interface WikiRebuildResultClaim {
   readonly sourceId: string;
 }
 
-export interface WikiRebuildResultPage {
+export interface WikiRebuildEvidenceResultPage {
   readonly path: string;
+  readonly format: "evidence";
   readonly summary: string;
   readonly acceptedClaims: readonly WikiRebuildResultClaim[];
+  readonly hypotheses: readonly string[];
   readonly links: readonly string[];
 }
+
+export type WikiRebuildResultPage = WikiRebuildEvidenceResultPage | WikiRebuildDocumentResultPage;
 
 export interface WikiRebuildResult {
   readonly schemaVersion: typeof wikiRebuildResultSchemaVersion;
@@ -129,6 +148,15 @@ export interface WikiRebuildComparison {
   readonly retainedClaimCount: number;
   readonly missingClaims: readonly WikiRebuildClaim[];
   readonly addedClaims: readonly WikiRebuildClaim[];
+  readonly baselineHypothesisCount: number;
+  readonly candidateHypothesisCount: number;
+  readonly retainedHypothesisCount: number;
+  readonly missingHypotheses: readonly string[];
+  readonly addedHypotheses: readonly string[];
+  readonly baselineSections: readonly string[];
+  readonly candidateSections: readonly string[];
+  readonly missingSections: readonly string[];
+  readonly addedSections: readonly string[];
   readonly baselineLinks: readonly string[];
   readonly candidateLinks: readonly string[];
   readonly missingLinks: readonly string[];
@@ -213,6 +241,15 @@ const comparisonKeys = [
   "retainedClaimCount",
   "missingClaims",
   "addedClaims",
+  "baselineHypothesisCount",
+  "candidateHypothesisCount",
+  "retainedHypothesisCount",
+  "missingHypotheses",
+  "addedHypotheses",
+  "baselineSections",
+  "candidateSections",
+  "missingSections",
+  "addedSections",
   "baselineLinks",
   "candidateLinks",
   "missingLinks",
@@ -303,12 +340,33 @@ function resultTemplate(task: Omit<WikiRebuildTask, "prompt">): WikiRebuildResul
     schemaVersion: wikiRebuildResultSchemaVersion,
     taskId: task.id,
     taskDigest: task.digest,
-    pages: task.targets.map((target) => ({
+    pages: task.targets.map((target) => resultPageTemplate(target, task.evidence[0]?.id ?? "")),
+  };
+}
+
+function resultPageTemplate(target: WikiRebuildTarget, sourceId: string): WikiRebuildResultPage {
+  if (target.kind === "synthesis") {
+    return {
       path: target.path,
-      summary: "source-backed summary",
-      acceptedClaims: [{ text: "one factual claim", sourceId: task.evidence[0]?.id ?? "" }],
-      links: [],
-    })),
+      format: "document",
+      sections: [
+        {
+          heading: "Conclusion",
+          blocks: [
+            { type: "paragraph", text: "source-grounded synthesis" },
+            { type: "acceptedClaims", claims: [{ text: "one factual claim", sourceId }] },
+          ],
+        },
+      ],
+    };
+  }
+  return {
+    path: target.path,
+    format: "evidence",
+    summary: "source-backed summary",
+    acceptedClaims: [{ text: "one factual claim", sourceId }],
+    hypotheses: [],
+    links: [],
   };
 }
 
@@ -395,12 +453,17 @@ function assertTargets(targets: readonly WikiRebuildTarget[]): void {
 }
 
 function assertTarget(target: WikiRebuildTarget): void {
-  const expectedPath = `pages/${target.kind === "source" ? "sources" : "concepts"}/${target.slug}.md`;
+  const directory = {
+    source: "sources",
+    concept: "concepts",
+    synthesis: "syntheses",
+  }[target.kind];
+  const expectedPath = `pages/${directory}/${target.slug}.md`;
   if (
     !oneLine(target.title) ||
     !oneLine(target.slug) ||
     !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(target.slug) ||
-    (target.kind !== "source" && target.kind !== "concept") ||
+    !["source", "concept", "synthesis"].includes(target.kind) ||
     target.path !== expectedPath ||
     !["draft", "active", "review", "superseded", "conflicted"].includes(target.status) ||
     !isoDate(target.createdAt) ||
@@ -455,8 +518,17 @@ function assertWikiRebuildResult(result: WikiRebuildResult): void {
 }
 
 function assertResultPage(page: WikiRebuildResultPage): void {
-  assertExactKeys(page, ["path", "summary", "acceptedClaims", "links"], "Wiki rebuild page");
+  if (page.format === "document") {
+    assertWikiRebuildDocumentPage(page);
+    return;
+  }
+  assertExactKeys(
+    page,
+    ["path", "format", "summary", "acceptedClaims", "hypotheses", "links"],
+    "Wiki rebuild page",
+  );
   if (
+    page.format !== "evidence" ||
     !oneLine(page.path) ||
     !plainResultText(page.summary) ||
     Buffer.byteLength(page.summary) > 100_000
@@ -464,7 +536,21 @@ function assertResultPage(page: WikiRebuildResultPage): void {
     throw new Error("Wiki rebuild result page is invalid");
   }
   assertClaims(page.acceptedClaims);
+  assertHypotheses(page.hypotheses);
   assertStringList(page.links, 100, "Wiki rebuild result links", true);
+}
+
+function assertHypotheses(hypotheses: readonly string[]): void {
+  if (
+    !validStringList(hypotheses, 100, true) ||
+    hypotheses.some((hypothesis) => !plainResultText(hypothesis) || hypothesis.length > 10_000)
+  ) {
+    throw new Error("Wiki rebuild result hypotheses are invalid");
+  }
+  const identities = hypotheses.map(normalize);
+  if (new Set(identities).size !== identities.length) {
+    throw new Error("Wiki rebuild result contains duplicate hypotheses");
+  }
 }
 
 function assertClaims(claims: readonly WikiRebuildResultClaim[]): void {
@@ -495,17 +581,27 @@ function assertResultMatchesTask(task: WikiRebuildTask, result: WikiRebuildResul
 }
 
 function assertResultPageBindings(task: WikiRebuildTask, page: WikiRebuildResultPage): void {
-  const sourceIds = new Set(task.evidence.map((source) => source.id));
-  if (page.acceptedClaims.some((claim) => !sourceIds.has(claim.sourceId))) {
-    throw new Error("Wiki rebuild result cites an unknown source id");
-  }
   const target = task.targets.find((candidate) => candidate.path === page.path);
+  assertResultSourceBindings(task, page);
   if (
     target === undefined ||
-    page.links.some((link) => !task.allowedLinks.includes(link) || link === target.slug)
+    (target.kind === "synthesis") !== (page.format === "document") ||
+    resultLinks(page).some((link) => !task.allowedLinks.includes(link) || link === target.slug)
   ) {
     throw new Error("Wiki rebuild result contains an unsupported link");
   }
+}
+
+function assertResultSourceBindings(task: WikiRebuildTask, page: WikiRebuildResultPage): void {
+  const sourceIds = new Set(task.evidence.map((source) => source.id));
+  const claims = page.format === "document" ? documentClaims(page) : page.acceptedClaims;
+  if (claims.some((claim) => !sourceIds.has(claim.sourceId))) {
+    throw new Error("Wiki rebuild result cites an unknown source id");
+  }
+}
+
+function resultLinks(page: WikiRebuildResultPage): readonly string[] {
+  return page.format === "document" ? documentLinks(page) : page.links;
 }
 
 function canonicalReportCore(input: WikiRebuildReportCore): WikiRebuildReportCore {
@@ -573,6 +669,8 @@ function assertComparison(comparison: WikiRebuildComparison): void {
     throw new Error("Wiki rebuild comparison is invalid");
   }
   assertClaimComparison(comparison);
+  assertHypothesisComparison(comparison);
+  assertSectionComparison(comparison);
   assertLinkComparison(comparison);
   assertSourceComparison(comparison);
 }
@@ -591,6 +689,30 @@ function validComparisonScalars(comparison: WikiRebuildComparison): boolean {
 function assertClaimComparison(comparison: WikiRebuildComparison): void {
   assertClaimList(comparison.missingClaims);
   assertClaimList(comparison.addedClaims);
+}
+
+function assertHypothesisComparison(comparison: WikiRebuildComparison): void {
+  assertSortedTextList(comparison.missingHypotheses, 1_000, "Wiki rebuild missing hypotheses");
+  assertSortedTextList(comparison.addedHypotheses, 1_000, "Wiki rebuild added hypotheses");
+}
+
+function assertSectionComparison(comparison: WikiRebuildComparison): void {
+  assertStringList(comparison.baselineSections, 100, "Wiki rebuild baseline sections", true);
+  assertStringList(comparison.candidateSections, 100, "Wiki rebuild candidate sections", true);
+  assertStringList(comparison.missingSections, 100, "Wiki rebuild missing sections", true);
+  assertStringList(comparison.addedSections, 100, "Wiki rebuild added sections", true);
+  assertListDifference(
+    comparison.baselineSections,
+    comparison.candidateSections,
+    comparison.missingSections,
+    "missing sections",
+  );
+  assertListDifference(
+    comparison.candidateSections,
+    comparison.baselineSections,
+    comparison.addedSections,
+    "added sections",
+  );
 }
 
 function assertLinkComparison(comparison: WikiRebuildComparison): void {
@@ -642,6 +764,9 @@ function validComparisonCounts(comparison: WikiRebuildComparison): boolean {
     comparison.baselineClaimCount,
     comparison.candidateClaimCount,
     comparison.retainedClaimCount,
+    comparison.baselineHypothesisCount,
+    comparison.candidateHypothesisCount,
+    comparison.retainedHypothesisCount,
   ];
   return (
     counts.every((count) => Number.isSafeInteger(count) && count >= 0 && count <= 1_000) &&
@@ -649,7 +774,14 @@ function validComparisonCounts(comparison: WikiRebuildComparison): boolean {
       Math.min(comparison.baselineClaimCount, comparison.candidateClaimCount) &&
     comparison.baselineClaimCount - comparison.retainedClaimCount ===
       comparison.missingClaims.length &&
-    comparison.candidateClaimCount - comparison.retainedClaimCount === comparison.addedClaims.length
+    comparison.candidateClaimCount - comparison.retainedClaimCount ===
+      comparison.addedClaims.length &&
+    comparison.retainedHypothesisCount <=
+      Math.min(comparison.baselineHypothesisCount, comparison.candidateHypothesisCount) &&
+    comparison.baselineHypothesisCount - comparison.retainedHypothesisCount ===
+      comparison.missingHypotheses.length &&
+    comparison.candidateHypothesisCount - comparison.retainedHypothesisCount ===
+      comparison.addedHypotheses.length
   );
 }
 
@@ -736,6 +868,15 @@ function assertStringList(
   }
 }
 
+function assertSortedTextList(values: readonly string[], max: number, label: string): void {
+  if (
+    !validStringList(values, max, true) ||
+    JSON.stringify(values) !== JSON.stringify([...values].sort(compareText))
+  ) {
+    throw new Error(`${label} is invalid`);
+  }
+}
+
 function assertInstructionList(values: readonly string[]): void {
   if (!validStringList(values, 100, false) || new Set(values).size !== values.length) {
     throw new Error("Wiki rebuild task instructions are invalid");
@@ -782,7 +923,7 @@ function managedSourcePath(path: string): boolean {
 }
 
 function rebuildPagePath(path: string): boolean {
-  return /^pages\/(?:sources|concepts)\/[a-z0-9]+(?:-[a-z0-9]+)*\.md$/.test(path);
+  return /^pages\/(?:sources|concepts|syntheses)\/[a-z0-9]+(?:-[a-z0-9]+)*\.md$/.test(path);
 }
 
 function oneLine(value: unknown): value is string {

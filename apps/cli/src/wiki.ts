@@ -8,19 +8,24 @@ import {
   type WikiAnswerRunnerResult,
   type WikiAnswerTask,
   WikiAnswerWorkflow,
+  type WikiMemoryComparisonRunInput,
+  WikiMemoryWorkflow,
   type WikiProposal,
   type WikiRebuildReport,
   WikiRebuildWorkflow,
+  type WikiReflectionReport,
+  WikiReflectionWorkflow,
   externalRunnerFileSha256,
 } from "@ai-lab/agent-runtime";
 import { createDefaultWorkspace, createWorkspace } from "@ai-lab/workspace";
-import type { CAC } from "cac";
+import type { CAC, Command } from "cac";
 
 interface SourceOptions {
   readonly title?: string;
 }
 
 interface TaskOptions {
+  readonly input?: string;
   readonly out?: string;
   readonly sources?: string;
   readonly title?: string;
@@ -37,6 +42,8 @@ interface ApplyOptions {
   readonly reviewer?: string;
 }
 
+interface RebuildApplyOptions extends ApplyOptions, ProposeOptions {}
+
 interface RunnerOptions {
   readonly acceptRunnerDigest?: string;
   readonly acceptTaskDigest?: string;
@@ -49,12 +56,18 @@ interface RunnerOptions {
   readonly trustRunner?: string;
 }
 
+interface ComparisonOptions {
+  readonly controlResult?: string;
+  readonly controlTask?: string;
+}
+
 interface WikiCommandOptions
   extends SourceOptions,
     TaskOptions,
     ProposeOptions,
     ApplyOptions,
-    RunnerOptions {}
+    RunnerOptions,
+    ComparisonOptions {}
 
 interface ArtifactReservation {
   readonly handle: FileHandle;
@@ -70,15 +83,31 @@ const runnerTerminationSignals: readonly NodeJS.Signals[] =
   process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
 
 export function registerWikiCommands(cli: CAC, root?: string): void {
-  cli
-    .command("wiki [...args]", "Manage the local provider-neutral LLM Wiki")
+  comparisonCommandOptions(
+    runnerCommandOptions(
+      artifactCommandOptions(
+        cli.command("wiki [...args]", "Manage the local provider-neutral LLM Wiki"),
+      ),
+    ),
+  ).action((args: string[], options: WikiCommandOptions) =>
+    dispatchWikiCommand(root, args, options),
+  );
+}
+
+function artifactCommandOptions(command: Command): Command {
+  return command
     .option("--title <title>", "Human-readable source or page title")
     .option("--sources <ids>", "Comma-separated registered source ids")
+    .option("--input <file>", "Private input artifact filename")
     .option("--out <file>", "Artifact filename under .ai-lab/wiki-exchange")
     .option("--task <file>", "Task artifact filename")
     .option("--result <file>", "AI result artifact filename")
     .option("--reviewer <name>", "Human reviewer identity")
-    .option("--accept-digest <digest>", "Full reviewed proposal digest")
+    .option("--accept-digest <digest>", "Full reviewed proposal or report digest");
+}
+
+function runnerCommandOptions(command: Command): Command {
+  return command
     .option("--runner-id <id>", "Explicit external runner id")
     .option("--runner-executable <path>", "Absolute external runner executable")
     .option("--runner-args-json <json>", "Static argument JSON array, default []")
@@ -87,10 +116,13 @@ export function registerWikiCommands(cli: CAC, root?: string): void {
     .option("--runner-timeout-ms <ms>", "External runner timeout in milliseconds")
     .option("--accept-task-digest <digest>", "Full disclosed task digest")
     .option("--accept-runner-digest <digest>", "Full disclosed runner config digest")
-    .option("--trust-runner <id>", "Exact disclosed runner id")
-    .action((args: string[], options: WikiCommandOptions) =>
-      dispatchWikiCommand(root, args, options),
-    );
+    .option("--trust-runner <id>", "Exact disclosed runner id");
+}
+
+function comparisonCommandOptions(command: Command): Command {
+  return command
+    .option("--control-task <file>", "No-memory control task artifact filename")
+    .option("--control-result <file>", "No-memory control result artifact filename");
 }
 
 async function dispatchWikiCommand(
@@ -110,10 +142,46 @@ async function dispatchWikiCommand(
     return answerReviewCommand(root, args[2] ?? "");
   if (route === "answer apply" && args.length === 3)
     return answerApplyCommand(root, args[2] ?? "", options);
+  if (route.startsWith("rebuild ") || route.startsWith("reflect ") || route.startsWith("memory "))
+    return dispatchWikiMaintenanceCommand(root, args, options);
+  throw new Error(`Unknown wiki command: wiki ${args.join(" ")}`);
+}
+
+async function dispatchWikiMaintenanceCommand(
+  root: string | undefined,
+  args: readonly string[],
+  options: WikiCommandOptions,
+): Promise<void> {
+  const route = args.slice(0, 2).join(" ");
   if (route === "rebuild task" && args.length === 2) return rebuildTaskCommand(root, options);
   if (route === "rebuild compare" && args.length === 2) return rebuildCompareCommand(root, options);
   if (route === "rebuild review" && args.length === 3)
     return rebuildReviewCommand(root, args[2] ?? "");
+  if (route === "rebuild apply" && args.length === 3)
+    return rebuildApplyCommand(root, args[2] ?? "", options);
+  if (route === "reflect prepare" && args.length === 2)
+    return reflectionPrepareCommand(root, options);
+  if (route === "reflect propose" && args.length === 2)
+    return reflectionProposeCommand(root, options);
+  if (route === "reflect review" && args.length === 3)
+    return reflectionReviewCommand(root, args[2] ?? "");
+  if (route === "reflect apply" && args.length === 3)
+    return reflectionApplyCommand(root, args[2] ?? "", options);
+  return dispatchWikiMemoryCommand(root, args, options);
+}
+
+async function dispatchWikiMemoryCommand(
+  root: string | undefined,
+  args: readonly string[],
+  options: WikiCommandOptions,
+): Promise<void> {
+  const route = args.slice(0, 2).join(" ");
+  if (route === "memory retrieve" && args.length === 3)
+    return memoryRetrieveCommand(root, args[2] ?? "", options);
+  if (route === "memory control" && args.length === 2) return memoryControlCommand(root, options);
+  if (route === "memory compare" && args.length === 2) return memoryCompareCommand(root, options);
+  if (route === "memory evaluate" && args.length === 2) return memoryEvaluateCommand(root, options);
+  if (route === "memory stats" && args.length === 2) return memoryStatsCommand(root);
   throw new Error(`Unknown wiki command: wiki ${args.join(" ")}`);
 }
 
@@ -376,6 +444,192 @@ async function rebuildReviewCommand(root: string | undefined, name: string): Pro
   console.log(formatWikiRebuildReview(report));
 }
 
+async function rebuildApplyCommand(
+  root: string | undefined,
+  name: string,
+  options: RebuildApplyOptions,
+): Promise<void> {
+  const [task, result, report] = await Promise.all([
+    readArtifact(workspaceRoot(root), requiredText(options.task, "--task")),
+    readArtifact(workspaceRoot(root), requiredText(options.result, "--result")),
+    readArtifact(workspaceRoot(root), name),
+  ]);
+  const applied = await rebuildWorkflow(root).applyReviewed({
+    task,
+    result,
+    report,
+    acceptedDigest: requiredText(options.acceptDigest, "--accept-digest"),
+    reviewedBy: requiredText(options.reviewer, "--reviewer"),
+  });
+  console.log(JSON.stringify(applied, null, 2));
+}
+
+async function reflectionPrepareCommand(
+  root: string | undefined,
+  options: TaskOptions,
+): Promise<void> {
+  const task = await reflectionWorkflow(root).prepareTask(
+    await readArtifact(workspaceRoot(root), requiredText(options.input, "--input")),
+  );
+  const artifact = await writeArtifact(
+    workspaceRoot(root),
+    requiredText(options.out, "--out"),
+    task,
+  );
+  console.log(JSON.stringify(reflectionTaskSummary(task, artifact), null, 2));
+}
+
+function reflectionTaskSummary(
+  task: Awaited<ReturnType<WikiReflectionWorkflow["prepareTask"]>>,
+  artifact: string,
+) {
+  return {
+    artifact,
+    id: task.id,
+    digest: task.digest,
+    evidence: task.evidence.kind,
+    contexts: task.contexts.map(({ path }) => path),
+  };
+}
+
+async function reflectionProposeCommand(
+  root: string | undefined,
+  options: ProposeOptions,
+): Promise<void> {
+  const [task, result] = await Promise.all([
+    readArtifact(workspaceRoot(root), requiredText(options.task, "--task")),
+    readArtifact(workspaceRoot(root), requiredText(options.result, "--result")),
+  ]);
+  const report = await reflectionWorkflow(root).prepareReport(task, result);
+  const artifact = await writeArtifact(
+    workspaceRoot(root),
+    requiredText(options.out, "--out"),
+    report,
+  );
+  console.log(JSON.stringify({ artifact, id: report.id, digest: report.digest }, null, 2));
+}
+
+async function reflectionReviewCommand(root: string | undefined, name: string): Promise<void> {
+  const report = reflectionWorkflow(root).reviewReport(
+    await readArtifact(workspaceRoot(root), name),
+  );
+  console.log(formatWikiReflectionReview(report));
+}
+
+async function reflectionApplyCommand(
+  root: string | undefined,
+  name: string,
+  options: RebuildApplyOptions,
+): Promise<void> {
+  const [task, result, report] = await Promise.all([
+    readArtifact(workspaceRoot(root), requiredText(options.task, "--task")),
+    readArtifact(workspaceRoot(root), requiredText(options.result, "--result")),
+    readArtifact(workspaceRoot(root), name),
+  ]);
+  const applied = await reflectionWorkflow(root).applyReviewed({
+    task,
+    result,
+    report,
+    acceptedDigest: requiredText(options.acceptDigest, "--accept-digest"),
+    reviewedBy: requiredText(options.reviewer, "--reviewer"),
+  });
+  console.log(JSON.stringify(applied, null, 2));
+}
+
+async function memoryRetrieveCommand(
+  root: string | undefined,
+  query: string,
+  options: TaskOptions,
+): Promise<void> {
+  const context = await memoryWorkflow(root).prepareContext(query);
+  if (options.out === undefined) {
+    console.log(JSON.stringify(context, null, 2));
+    return;
+  }
+  const artifact = await writeArtifact(workspaceRoot(root), options.out, context);
+  console.log(JSON.stringify(memoryContextSummary(context, artifact), null, 2));
+}
+
+function memoryContextSummary(
+  context: Awaited<ReturnType<WikiMemoryWorkflow["prepareContext"]>>,
+  artifact: string,
+) {
+  return {
+    artifact,
+    id: context.id,
+    digest: context.digest,
+    memories: context.memories.map(({ path, kind, score, matchedTerms }) => ({
+      path,
+      kind,
+      score,
+      matchedTerms,
+    })),
+  };
+}
+
+async function memoryEvaluateCommand(
+  root: string | undefined,
+  options: WikiCommandOptions,
+): Promise<void> {
+  const [task, input] = await Promise.all([
+    readArtifact(workspaceRoot(root), requiredText(options.task, "--task")),
+    readArtifact(workspaceRoot(root), requiredText(options.input, "--input")),
+  ]);
+  const record = await memoryWorkflow(root).recordEvaluation(task, input);
+  console.log(JSON.stringify({ id: record.id, digest: record.digest }, null, 2));
+}
+
+async function memoryControlCommand(
+  root: string | undefined,
+  options: WikiCommandOptions,
+): Promise<void> {
+  const task = await readArtifact(workspaceRoot(root), requiredText(options.task, "--task"));
+  const control = await memoryWorkflow(root).prepareControlTask(task);
+  const artifact = await writeArtifact(
+    workspaceRoot(root),
+    requiredText(options.out, "--out"),
+    control,
+  );
+  console.log(JSON.stringify({ artifact, id: control.id, digest: control.digest }, null, 2));
+}
+
+async function memoryCompareCommand(
+  root: string | undefined,
+  options: WikiCommandOptions,
+): Promise<void> {
+  const input = await readMemoryComparisonInput(workspaceRoot(root), options);
+  const record = await memoryWorkflow(root).recordComparison(input);
+  console.log(JSON.stringify(memoryComparisonSummary(record), null, 2));
+}
+
+async function readMemoryComparisonInput(
+  rootPath: string,
+  options: WikiCommandOptions,
+): Promise<WikiMemoryComparisonRunInput> {
+  const [task, controlTask, memoryResult, controlResult, judgment] = await Promise.all([
+    readArtifact(rootPath, requiredText(options.task, "--task")),
+    readArtifact(rootPath, requiredText(options.controlTask, "--control-task")),
+    readArtifact(rootPath, requiredText(options.result, "--result")),
+    readArtifact(rootPath, requiredText(options.controlResult, "--control-result")),
+    readArtifact(rootPath, requiredText(options.input, "--input")),
+  ]);
+  return { task, controlTask, memoryResult, controlResult, judgment };
+}
+
+function memoryComparisonSummary(
+  record: Awaited<ReturnType<WikiMemoryWorkflow["recordComparison"]>>,
+) {
+  return {
+    id: record.id,
+    digest: record.digest,
+    preference: record.comparison?.preference,
+  };
+}
+
+async function memoryStatsCommand(root?: string): Promise<void> {
+  console.log(JSON.stringify(await memoryWorkflow(root).summarizeEvaluations(), null, 2));
+}
+
 function workflow(root?: string): WikiAnswerWorkflow {
   return new WikiAnswerWorkflow(
     root === undefined ? createDefaultWorkspace() : createWorkspace(root),
@@ -384,6 +638,18 @@ function workflow(root?: string): WikiAnswerWorkflow {
 
 function rebuildWorkflow(root?: string): WikiRebuildWorkflow {
   return new WikiRebuildWorkflow(
+    root === undefined ? createDefaultWorkspace() : createWorkspace(root),
+  );
+}
+
+function reflectionWorkflow(root?: string): WikiReflectionWorkflow {
+  return new WikiReflectionWorkflow(
+    root === undefined ? createDefaultWorkspace() : createWorkspace(root),
+  );
+}
+
+function memoryWorkflow(root?: string): WikiMemoryWorkflow {
+  return new WikiMemoryWorkflow(
     root === undefined ? createDefaultWorkspace() : createWorkspace(root),
   );
 }
@@ -642,7 +908,16 @@ export function formatWikiProposalReview(proposal: WikiProposal): string {
 
 export function formatWikiRebuildReview(report: WikiRebuildReport): string {
   return [
-    "Review this exact shadow rebuild report. It cannot be applied by this workflow.",
+    "Review this exact shadow rebuild report before applying its bound task and result.",
+    "Terminal control and direction characters are escaped.",
+    safeJson(report),
+    `Digest: ${report.digest}`,
+  ].join("\n");
+}
+
+export function formatWikiReflectionReview(report: WikiReflectionReport): string {
+  return [
+    "Review this exact reflection report before applying its bound task and result.",
     "Terminal control and direction characters are escaped.",
     safeJson(report),
     `Digest: ${report.digest}`,

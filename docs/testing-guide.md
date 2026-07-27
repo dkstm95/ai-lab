@@ -28,9 +28,16 @@ creation and proposal preparation leave the live Wiki unchanged, stale or forged
 source IDs remain bound to selected evidence, and only an exact human-approved digest is promoted.
 CLI tests must not open a browser, call an API, or invoke a subscription tool.
 
+Memory tests verify active and review-date eligibility, reviewed multilingual retrieval terms,
+deterministic relevance ranking, the three-page limit, answer-task injection, stale hashes, exact
+per-page assessments, digest-bound no-memory controls, paired result hashes and preferences, and
+aggregate usefulness rates. Evaluation fixtures are local and must not treat one comparison as
+causal proof.
+
 Shadow rebuild tests keep baseline pages hidden from task contexts, bind schema, index, source, and
-target hashes, compare candidates only in a temporary Wiki copy, and prove that no apply route
-exists.
+target hashes, accept independent evidence pages and structured synthesis targets, compare
+candidates only in a temporary Wiki copy, preserve typed blocks and hypotheses, report claim,
+hypothesis, and section loss, and require an exact reviewed report before transactional promotion.
 
 External-runner tests verify strict envelopes, request binding, fatal UTF-8, byte and time limits,
 fresh environment construction, sensitive environment-name rejection, no-shell argument handling,

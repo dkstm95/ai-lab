@@ -19,33 +19,63 @@ import {
   type WikiProposal,
   type WikiRebuildResult,
   type WikiRebuildTask,
+  type WikiReflectionResult,
   addWikiSource,
   applyWikiProposal,
+  applyWikiRebuild,
+  applyWikiReflection,
   initWiki,
   lintWiki,
   parseWikiAnswerResult,
   parseWikiAnswerResultForTask,
   parseWikiAnswerTask,
+  parseWikiMemoryComparisonJudgmentInput,
+  parseWikiMemoryContext,
+  parseWikiMemoryEvaluationInput,
+  parseWikiMemoryEvaluationRecord,
   parseWikiPage,
   parseWikiRebuildReport,
   parseWikiRebuildResult,
   parseWikiRebuildResultForTask,
   parseWikiRebuildTask,
+  parseWikiReflectionReport,
+  parseWikiReflectionResult,
+  parseWikiReflectionResultForTask,
+  parseWikiReflectionTask,
+  parseWikiReflectionTaskInput,
   prepareWikiAnswerProposal,
   prepareWikiAnswerProposalFromTask,
   prepareWikiAnswerTask,
   prepareWikiEvolve,
   prepareWikiIngest,
+  prepareWikiMemoryContext,
+  prepareWikiMemoryControlTask,
   prepareWikiQuery,
   prepareWikiRebuildReport,
   prepareWikiRebuildTask,
+  prepareWikiReflectionReport,
+  prepareWikiReflectionTask,
   readWikiPage,
+  recordWikiMemoryComparison,
+  recordWikiMemoryEvaluation,
   recordWikiRun,
   renderWikiPage,
+  summarizeWikiMemoryEvaluations,
   validateCurrentWikiAnswerTask,
+  validateCurrentWikiMemoryContext,
   validateCurrentWikiRebuildTask,
+  validateCurrentWikiReflectionTask,
 } from "../src/index.js";
+import {
+  buildWikiMemoryContext,
+  buildWikiMemoryEvaluationRecord,
+  selectWikiMemories,
+  summarizeWikiMemoryEvaluationRecords,
+  wikiMemoryReference,
+} from "../src/memory.js";
 import { buildWikiRebuildReport, buildWikiRebuildTask } from "../src/rebuild-exchange.js";
+import { buildWikiReflectionTask } from "../src/reflection-exchange.js";
+import { buildWikiReflectionReport } from "../src/reflection-result.js";
 import { promoteWikiFiles } from "../src/transaction.js";
 
 const roots: string[] = [];
@@ -74,7 +104,10 @@ describe("wiki", () => {
     await expect(stat(join(workspace.root, "wiki", "pages", "playbooks"))).resolves.toBeDefined();
     await expect(stat(join(workspace.root, "wiki", "pages", "questions"))).resolves.toBeDefined();
     const schema = await readFile(join(workspace.root, "wiki", "schema.md"), "utf8");
-    expect(schema).toContain("The LLM agent proposes source-backed changes");
+    expect(schema).toContain(
+      "The LLM agent prepares source-backed knowledge and evidence-bound reflections",
+    );
+    expect(schema).toContain("Return a typed failure, playbook, decision, or skip result");
     expect(schema).toContain("Avoid stale metaphors");
     expect(schema).toContain("Prefer short, familiar words");
     expect(schema).toContain("Remove every word that does not add meaning");
@@ -238,6 +271,38 @@ describe("wiki", () => {
 
     expect(page.metadata).toEqual(metadata());
     expect(rendered).toContain("kind: concept");
+    expect(() =>
+      parseWikiPage(
+        renderWikiPage(
+          { ...metadata(), retrievalTerms: ["same term", "same term"] },
+          "## Summary\n\nA page.",
+        ),
+      ),
+    ).toThrow("retrievalTerms");
+  });
+
+  it("reports active reflection pages without reviewed retrieval terms", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeFile(
+      join(workspace.root, "wiki", "pages", "failures", "missing-terms.md"),
+      renderWikiPage(
+        {
+          title: "Missing Terms",
+          slug: "missing-terms",
+          kind: "failure",
+          status: "active",
+          createdAt: "2026-06-17T12:00:00.000Z",
+          updatedAt: "2026-06-17T12:00:00.000Z",
+          sources: [],
+        },
+        "## Summary\n\nA reusable correction.\n\n## Links\n\n",
+      ),
+    );
+
+    const report = await lintWiki(workspace);
+
+    expect(report.issues.map(({ code }) => code)).toContain("missing-retrieval-terms");
   });
 
   it("reports lint findings for invalid wiki content", async () => {
@@ -417,6 +482,452 @@ describe("wiki", () => {
     await expect(prepareWikiEvolve(workspace)).rejects.toThrow("symbolic link");
   });
 
+  it("prepares a portable reflection task bound to an explicit local run", async () => {
+    const workspace = await tempWorkspace();
+    const run = await recordWikiRun(
+      workspace,
+      {
+        task: "review",
+        input: "The user corrected the memory scope.",
+        output: "The response proposed a project process instead.",
+      },
+      now(),
+    );
+
+    const task = await prepareWikiReflectionTask(workspace, {
+      runId: run.id,
+      feedback: "Keep the requested personal-memory scope.",
+      validation: "The proposed process lesson answered a different question.",
+      changedFiles: ["packages/wiki/src/index.ts", "docs/self-evolution-guide.md"],
+    });
+
+    expect(task.id).toBe(`wiki-reflection-${task.digest}`);
+    expect(task.evidence).toMatchObject({ kind: "recorded-run", id: run.id });
+    expect(task.contexts.map(({ path }) => path)).toEqual([
+      "index.md",
+      `raw/runs/${run.id}.json`,
+      "schema.md",
+    ]);
+    expect(task.prompt).toContain("untrusted evidence");
+    expect(task.prompt).toContain("Return exactly one JSON object");
+    expect(task.prompt).toContain("ai-lab.wiki-reflection-result.v2");
+    expect(task.expectedFiles).toEqual([
+      "pages/decisions/*.md",
+      "pages/failures/*.md",
+      "pages/playbooks/*.md",
+    ]);
+    expect(task.constraints).toContain(
+      "Do not cite raw/runs as a durable public source or add it to page frontmatter.",
+    );
+    if (task.evidence.kind !== "recorded-run") throw new Error("Expected recorded run");
+    expect(() =>
+      parseWikiReflectionTask({
+        ...task,
+        contexts: [...task.contexts].reverse(),
+      }),
+    ).toThrow("canonical form");
+    expect(() =>
+      parseWikiReflectionTask({
+        ...task,
+        feedback: "Changed after digest.",
+      }),
+    ).toThrow("digest or prompt");
+    expect(() => parseWikiReflectionTask({ ...task, schemaVersion: "wrong" })).toThrow(
+      "invalid scalar fields",
+    );
+    expect(() => parseWikiReflectionTask({ ...task, prompt: undefined })).toThrow(
+      "invalid scalar fields",
+    );
+    expect(() =>
+      parseWikiReflectionTask({
+        ...task,
+        evidence: { kind: "unknown", summary: "Summary." },
+      }),
+    ).toThrow("summary evidence is invalid");
+    expect(() =>
+      parseWikiReflectionTask({
+        ...task,
+        contexts: [task.contexts[0], task.contexts[0]],
+      }),
+    ).toThrow("unique paths");
+    expect(() =>
+      parseWikiReflectionTask({
+        ...task,
+        contexts: [{ ...task.contexts[0], sha256: "0".repeat(64) }, ...task.contexts.slice(1)],
+      }),
+    ).toThrow("context is invalid");
+    expect(() =>
+      buildWikiReflectionTask({
+        evidence: task.evidence,
+        feedback: task.feedback,
+        validation: task.validation,
+        changedFiles: task.changedFiles,
+        contexts: task.contexts.filter(({ path }) => path !== "schema.md"),
+        expectedFiles: task.expectedFiles,
+        constraints: task.constraints,
+      }),
+    ).toThrow("must bind schema.md and index.md");
+    expect(() =>
+      buildWikiReflectionTask({
+        evidence: { ...task.evidence, sha256: "0".repeat(64) },
+        feedback: task.feedback,
+        validation: task.validation,
+        changedFiles: task.changedFiles,
+        contexts: task.contexts,
+        expectedFiles: task.expectedFiles,
+        constraints: task.constraints,
+      }),
+    ).toThrow("does not bind its recorded run");
+    await expect(validateCurrentWikiReflectionTask(workspace, task)).resolves.toEqual(task);
+  });
+
+  it("supports a supplied reflection summary without fabricating a raw run", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+
+    const task = await prepareWikiReflectionTask(workspace, {
+      runSummary: "A concise local summary with no retained transcript.",
+      feedback: "Preserve the requested scope.",
+      validation: "The correction is repeatable.",
+      changedFiles: [],
+    });
+
+    expect(task.evidence).toEqual({
+      kind: "provided-summary",
+      summary: "A concise local summary with no retained transcript.",
+    });
+    expect(task.contexts.map(({ path }) => path)).toEqual(["index.md", "schema.md"]);
+  });
+
+  it("rejects ambiguous, missing, unsafe, and stale reflection evidence", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    const input = {
+      feedback: "Correction.",
+      validation: "Validation.",
+      changedFiles: [],
+    };
+
+    await expect(prepareWikiReflectionTask(workspace, input)).rejects.toThrow(
+      "exactly one of runId or runSummary",
+    );
+    await expect(
+      prepareWikiReflectionTask(workspace, { ...input, runId: "run", runSummary: "Summary." }),
+    ).rejects.toThrow("exactly one of runId or runSummary");
+    expect(() => parseWikiReflectionTaskInput(null)).toThrow("must be an object");
+    expect(() =>
+      parseWikiReflectionTaskInput({
+        ...input,
+        runSummary: "Summary.",
+        unexpected: true,
+      }),
+    ).toThrow("unknown or missing fields");
+    await expect(
+      prepareWikiReflectionTask(workspace, { ...input, runId: "../outside" }),
+    ).rejects.toThrow("run id is invalid");
+    await expect(
+      prepareWikiReflectionTask(workspace, { ...input, runId: "missing" }),
+    ).rejects.toThrow();
+    await expect(
+      prepareWikiReflectionTask(workspace, {
+        ...input,
+        runSummary: "Summary.",
+        changedFiles: ["../outside"],
+      }),
+    ).rejects.toThrow("changed file path is invalid");
+
+    const run = await recordWikiRun(
+      workspace,
+      { task: "review", input: "input", output: "output" },
+      now(),
+    );
+    const task = await prepareWikiReflectionTask(workspace, { ...input, runId: run.id });
+    await writeFile(run.path, '{"changed":true}\n', "utf8");
+    await expect(validateCurrentWikiReflectionTask(workspace, task)).rejects.toThrow(
+      "contexts changed",
+    );
+  });
+
+  it("prepares, reviews, and applies an exact reflection report", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    const task = await prepareWikiReflectionTask(workspace, reflectionInput());
+    const result = reflectionResult(task);
+    const before = await reflectionWikiState(workspace.root);
+
+    const report = await prepareWikiReflectionReport(workspace, task, result, now());
+
+    expect(report.id).toBe(`wiki-reflection-report-${report.digest}`);
+    expect(report.outcome).toBe("propose");
+    expect(report.candidateDiagnostics.issues).toEqual([]);
+    expect(report.files.map(({ path }) => path)).toEqual([
+      "index.md",
+      "pages/failures/scope-mismatch.md",
+    ]);
+    expect(report.files[1]?.content).toContain("## Prevention Check");
+    expect(report.files[1]?.content).toContain("- hypothesis: The mismatch may recur.");
+    expect(report.files[1]?.content).toContain("Restate \\*exact\\* requested scope.");
+    expect(report.files[1]?.content).toContain("sources:\n");
+    expect(await reflectionWikiState(workspace.root)).toEqual(before);
+    expect(parseWikiReflectionReport(report)).toEqual(report);
+    await expect(
+      applyWikiReflection(
+        workspace,
+        reflectionApplication(task, result, report, {
+          ...reflectionApproval(report),
+          digest: "0".repeat(64),
+        }),
+      ),
+    ).rejects.toThrow("does not match");
+
+    const applied = await applyWikiReflection(
+      workspace,
+      reflectionApplication(task, result, report),
+      new Date("2026-06-17T13:00:00.000Z"),
+    );
+
+    expect(applied.files.some((path) => path.endsWith("/pages/failures/scope-mismatch.md"))).toBe(
+      true,
+    );
+    expect(applied.files.some((path) => path.endsWith("/index.md"))).toBe(true);
+    expect(applied.files.some((path) => path.endsWith("/log.md"))).toBe(true);
+    await expect(
+      readFile(join(workspace.root, "wiki", "pages", "failures", "scope-mismatch.md"), "utf8"),
+    ).resolves.toContain("## Correction");
+    await expect(readFile(join(workspace.root, "wiki", "index.md"), "utf8")).resolves.toContain(
+      "[Scope Mismatch](pages/failures/scope-mismatch.md)",
+    );
+    await expect(readFile(join(workspace.root, "wiki", "log.md"), "utf8")).resolves.toContain(
+      `reflection | ${report.id} | digest=${report.digest}`,
+    );
+    await expect(
+      applyWikiReflection(workspace, reflectionApplication(task, result, report)),
+    ).rejects.toThrow("already applied");
+  });
+
+  it.each([
+    [
+      "playbook",
+      {
+        kind: "playbook",
+        title: "Review Scope",
+        slug: "review-scope",
+        summary: "Check the requested scope before reviewing.",
+        retrievalTerms: ["memory scope review", "기억 범위 검토"],
+        whenToUse: "Use this when a request can refer to more than one memory layer.",
+        steps: ["Restate the requested scope.", "Classify each candidate."],
+        checks: ["Each candidate answers the stated scope."],
+        hypotheses: [],
+        links: [],
+      },
+      "## When to Use",
+    ],
+    [
+      "decision",
+      {
+        kind: "decision",
+        title: "Keep Raw Runs Local",
+        slug: "keep-raw-runs-local",
+        summary: "Keep raw runs local and promote concise memory only.",
+        retrievalTerms: ["local raw runs", "원본 실행 기록"],
+        decision: "Raw runs remain local-only evidence.",
+        reasoning: ["Raw runs can contain private or noisy details."],
+        consequences: ["Shared pages must remain useful without the transcript."],
+        hypotheses: [],
+        links: [],
+      },
+      "## Consequences",
+    ],
+  ] as const)(
+    "renders a typed %s reflection without model-authored Markdown",
+    async (_, page, section) => {
+      const workspace = await tempWorkspace();
+      await initWiki(workspace);
+      const task = await prepareWikiReflectionTask(workspace, reflectionInput());
+      const result = {
+        schemaVersion: "ai-lab.wiki-reflection-result.v2",
+        taskId: task.id,
+        taskDigest: task.digest,
+        outcome: "propose",
+        rationale: "This lesson is reusable.",
+        page,
+      };
+
+      const report = await prepareWikiReflectionReport(workspace, task, result, now());
+
+      expect(report.files[1]?.content).toContain(section);
+      expect(report.candidateDiagnostics.issues).toEqual([]);
+    },
+  );
+
+  it("records a skip reflection without making it applicable", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    const task = await prepareWikiReflectionTask(workspace, reflectionInput());
+    const result = {
+      schemaVersion: "ai-lab.wiki-reflection-result.v2",
+      taskId: task.id,
+      taskDigest: task.digest,
+      outcome: "skip",
+      rationale: "The event is too specific to save.",
+    } as const;
+
+    const report = await prepareWikiReflectionReport(workspace, task, result, now());
+
+    expect(report.files).toEqual([]);
+    expect(report.outcome).toBe("skip");
+    await expect(
+      applyWikiReflection(workspace, reflectionApplication(task, result, report)),
+    ).rejects.toThrow("cannot be applied");
+  });
+
+  it("rejects malformed, unbound, unsafe, and stale reflection results", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    const task = await prepareWikiReflectionTask(workspace, reflectionInput());
+    const result = reflectionResult(task);
+
+    expect(() => parseWikiReflectionResult({ ...result, unexpected: true })).toThrow(
+      "unknown or missing fields",
+    );
+    expect(() =>
+      parseWikiReflectionResult({
+        ...result,
+        page: { ...result.page, failure: "## Injected heading" },
+      }),
+    ).toThrow("failure page is invalid");
+    expect(() =>
+      parseWikiReflectionResultForTask(task, { ...result, taskDigest: "0".repeat(64) }),
+    ).toThrow("does not match");
+    await expect(
+      prepareWikiReflectionReport(
+        workspace,
+        task,
+        { ...result, page: { ...result.page, slug: "different-title" } },
+        now(),
+      ),
+    ).rejects.toThrow("slug must match");
+    const brokenResult = {
+      ...result,
+      page: { ...result.page, links: ["missing-page"] },
+    };
+    const broken = await prepareWikiReflectionReport(workspace, task, brokenResult, now());
+    expect(broken.candidateDiagnostics.issues.map(({ code }) => code)).toContain(
+      "broken-wiki-link",
+    );
+    await expect(
+      applyWikiReflection(workspace, reflectionApplication(task, brokenResult, broken)),
+    ).rejects.toThrow("lint issue");
+    const current = await prepareWikiReflectionReport(workspace, task, result, now());
+    await writeFile(join(workspace.root, "wiki", "index.md"), "# Changed\n", "utf8");
+    await expect(
+      applyWikiReflection(workspace, reflectionApplication(task, result, current)),
+    ).rejects.toThrow("contexts changed");
+  });
+
+  it("strictly rejects malformed reflection result and report artifacts", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    const task = await prepareWikiReflectionTask(workspace, reflectionInput());
+    const result = reflectionResult(task);
+    const report = await prepareWikiReflectionReport(workspace, task, result, now());
+    const { id: _id, digest: _digest, ...reportInput } = report;
+
+    expect(() => parseWikiReflectionResult(null)).toThrow("must be an object");
+    expect(() =>
+      parseWikiReflectionResult({
+        schemaVersion: result.schemaVersion,
+        taskId: result.taskId,
+        taskDigest: result.taskDigest,
+        outcome: "other",
+        rationale: result.rationale,
+      }),
+    ).toThrow("outcome is invalid");
+    expect(() => parseWikiReflectionResult({ ...result, page: null })).toThrow(
+      "page must be an object",
+    );
+    expect(() =>
+      parseWikiReflectionResult({
+        ...result,
+        page: { ...result.page, links: ["same", "same"] },
+      }),
+    ).toThrow("shared fields");
+    expect(() =>
+      parseWikiReflectionResult({
+        ...result,
+        page: {
+          kind: "playbook",
+          title: "Review Scope",
+          slug: "review-scope",
+          summary: "Review the requested scope.",
+          retrievalTerms: ["requested scope"],
+          whenToUse: "Use this before memory review.",
+          steps: [],
+          checks: ["The scope matches."],
+          hypotheses: [],
+          links: [],
+        },
+      }),
+    ).toThrow("playbook page is invalid");
+    expect(() =>
+      parseWikiReflectionResult({
+        ...result,
+        page: {
+          kind: "decision",
+          title: "Keep Runs Local",
+          slug: "keep-runs-local",
+          summary: "Keep runs local.",
+          retrievalTerms: ["local raw runs"],
+          decision: "Raw runs remain local.",
+          reasoning: [],
+          consequences: ["Shared memory stays concise."],
+          hypotheses: [],
+          links: [],
+        },
+      }),
+    ).toThrow("decision page is invalid");
+    expect(() =>
+      parseWikiReflectionReport({ ...report, files: [...report.files].reverse() }),
+    ).toThrow("canonical form");
+    expect(() => parseWikiReflectionReport({ ...report, digest: "0".repeat(64) })).toThrow(
+      "digest does not match",
+    );
+    expect(() => parseWikiReflectionReport({ ...report, generatedAt: "invalid" })).toThrow(
+      "invalid scalar fields",
+    );
+    expect(() =>
+      buildWikiReflectionReport({
+        ...reportInput,
+        files: [...report.files, { path: "extra.md", content: "" }],
+      }),
+    ).toThrow("files are invalid");
+    expect(() =>
+      buildWikiReflectionReport({
+        ...reportInput,
+        baseHashes: { ...report.baseHashes, "bad.md": "bad" },
+      }),
+    ).toThrow("base hash is invalid");
+    expect(() =>
+      buildWikiReflectionReport({
+        ...reportInput,
+        introducedIssues: Array.from({ length: 1_001 }, () => ({
+          code: "issue",
+          path: "index.md",
+          message: "Issue.",
+        })),
+      }),
+    ).toThrow("issues are invalid");
+    expect(() =>
+      buildWikiReflectionReport({
+        ...reportInput,
+        introducedIssues: [{ code: "", path: "index.md", message: "Issue." }],
+      }),
+    ).toThrow("issue is invalid");
+    expect(() =>
+      buildWikiReflectionReport({ ...reportInput, outcome: "skip", files: report.files }),
+    ).toThrow("outcome does not match");
+  });
+
   it("prepares deterministic provider-neutral answer tasks", async () => {
     const workspace = await tempWorkspace();
     await initWiki(workspace);
@@ -439,6 +950,336 @@ describe("wiki", () => {
     expect(task.prompt).toContain('"sourceId":"karpathy-llm-wiki"');
     await expect(validateCurrentWikiAnswerTask(workspace, task)).resolves.toEqual(task);
     await expect(wikiState(workspace.root)).resolves.toEqual(before);
+  });
+
+  it("retrieves at most three current active memories by relevance with stable tie breaks", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await Promise.all([
+      writeMemoryPage(workspace.root, "playbook", "Memory Scope Review", "active"),
+      writeMemoryPage(workspace.root, "failure", "Memory Scope Review", "active"),
+      writeMemoryPage(workspace.root, "decision", "Memory Scope Review", "active"),
+      writeMemoryPage(workspace.root, "playbook", "Memory Scope Review Stale", "active", {
+        reviewAfter: "2026-06-16T12:00:00.000Z",
+      }),
+      writeMemoryPage(workspace.root, "failure", "Memory Scope Review Old", "superseded"),
+      writeMemoryPage(workspace.root, "playbook", "Release Checklist", "active"),
+    ]);
+
+    const context = await prepareWikiMemoryContext(workspace, "memory scope review", now());
+
+    expect(context.memories.map(({ kind }) => kind)).toEqual(["playbook", "failure", "decision"]);
+    expect(context.memories).toHaveLength(3);
+    expect(context.memories.every(({ matchedTerms }) => matchedTerms.length === 2)).toBe(true);
+    expect(parseWikiMemoryContext(context)).toEqual(context);
+    await expect(validateCurrentWikiMemoryContext(workspace, context, now())).resolves.toEqual(
+      context,
+    );
+    expect(() => parseWikiMemoryContext({ ...context, extra: true })).toThrow("unknown");
+
+    await writeFile(
+      join(workspace.root, "wiki", context.memories[0]?.path ?? ""),
+      `${context.memories[0]?.content}\nChanged.\n`,
+      "utf8",
+    );
+    await expect(validateCurrentWikiMemoryContext(workspace, context, now())).rejects.toThrow(
+      "stale",
+    );
+  });
+
+  it("scores title, slug, summary, and body terms while rejecting ineligible retrieval input", () => {
+    const candidate = {
+      path: "pages/playbooks/retrieval-slug.md",
+      title: "Retrieval Title",
+      slug: "retrieval-slug",
+      kind: "playbook",
+      status: "active",
+      content:
+        "---\ntitle: Retrieval Title\n---\n\n## Summary\n\nSummary guidance.\n\n## Steps\n\nBody guidance.\n",
+    };
+    const memories = selectWikiMemories(
+      [
+        candidate,
+        { ...candidate, path: "pages/failures/stale.md", kind: "failure", reviewAfter: "bad" },
+        { ...candidate, path: "pages/decisions/draft.md", kind: "decision", status: "draft" },
+        {
+          ...candidate,
+          path: "pages/playbooks/unrelated.md",
+          title: "Other",
+          slug: "other",
+          content: "## Summary\n\nDifferent terms.",
+        },
+      ],
+      "title slug summary body",
+      now(),
+    );
+
+    expect(memories).toMatchObject([
+      { score: 19, matchedTerms: ["body", "slug", "summary", "title"] },
+    ]);
+    expect(
+      selectWikiMemories(
+        [{ ...candidate, retrievalTerms: ["personal context", "기억 범위"] }],
+        "대화의 기억 범위를 확인해",
+        now(),
+      ),
+    ).toMatchObject([{ score: 10, matchedTerms: ["범위"] }]);
+    expect(
+      selectWikiMemories(
+        [{ ...candidate, retrievalTerms: ["기억 범위"] }],
+        "일반적인 기억 검색",
+        now(),
+      ),
+    ).toEqual([]);
+    expect(selectWikiMemories([candidate], "what is the", now())).toEqual([]);
+    expect(() => selectWikiMemories([candidate], "query", now(), 4)).toThrow("limit");
+    expect(() => selectWikiMemories([candidate], "\n", now())).toThrow("one-line");
+  });
+
+  it("strictly validates memory contexts, evaluations, and every selected page", () => {
+    const memories = selectWikiMemories(
+      [
+        {
+          path: "pages/playbooks/scope-review.md",
+          title: "Scope Review",
+          slug: "scope-review",
+          kind: "playbook",
+          status: "active",
+          content: "## Summary\n\nReview scope.",
+        },
+        {
+          path: "pages/failures/scope-failure.md",
+          title: "Scope Failure",
+          slug: "scope-failure",
+          kind: "failure",
+          status: "active",
+          content: "## Summary\n\nScope correction.",
+        },
+      ],
+      "scope review",
+      now(),
+    );
+    const context = buildWikiMemoryContext({
+      query: "scope review",
+      preparedAt: now().toISOString(),
+      memories,
+    });
+    const references = memories.map(wikiMemoryReference);
+    const first = references[0];
+    if (first === undefined) throw new Error("Expected a memory reference");
+    const helpful = buildWikiMemoryEvaluationRecord({
+      taskId: "wiki-answer-task",
+      taskDigest: "a".repeat(64),
+      query: "scope review",
+      memories: references,
+      evaluation: {
+        taskOutcome: "improved",
+        assessments: references.map(({ path }) => ({ path, verdict: "helpful" })),
+      },
+      recordedAt: now().toISOString(),
+    });
+    const harmful = buildWikiMemoryEvaluationRecord({
+      taskId: "wiki-answer-task-2",
+      taskDigest: "b".repeat(64),
+      query: "scope review",
+      memories: references,
+      evaluation: {
+        taskOutcome: "worse",
+        assessments: references.map(({ path }) => ({ path, verdict: "harmful" })),
+      },
+      recordedAt: new Date("2026-06-17T13:00:00.000Z").toISOString(),
+    });
+
+    expect(summarizeWikiMemoryEvaluationRecords([helpful, harmful])).toMatchObject({
+      evaluations: 2,
+      helpfulRate: 0.5,
+      harmfulRate: 0.5,
+      counts: { improved: 1, worse: 1, helpful: 2, harmful: 2 },
+    });
+    expect(() => parseWikiMemoryContext(null)).toThrow("object");
+    expect(() => parseWikiMemoryContext({ ...context, digest: "0".repeat(64) })).toThrow("digest");
+    expect(() => parseWikiMemoryContext({ ...context, preparedAt: "invalid" })).toThrow("scalar");
+    expect(() =>
+      parseWikiMemoryContext({ ...context, memories: [context.memories[0], context.memories[0]] }),
+    ).toThrow("unique");
+    expect(() =>
+      parseWikiMemoryContext({
+        ...context,
+        memories: [{ ...context.memories[0], content: "tampered" }],
+      }),
+    ).toThrow("hash");
+    expect(() =>
+      parseWikiMemoryEvaluationInput({ taskOutcome: "unknown", assessments: [] }),
+    ).toThrow("invalid");
+    expect(() =>
+      parseWikiMemoryEvaluationInput({
+        taskOutcome: "unchanged",
+        assessments: [{ path: first.path, verdict: "unused" }],
+      }),
+    ).not.toThrow();
+    expect(() =>
+      buildWikiMemoryEvaluationRecord({
+        taskId: "wiki-answer-task",
+        taskDigest: "a".repeat(64),
+        query: "scope review",
+        memories: references,
+        evaluation: {
+          taskOutcome: "unchanged",
+          assessments: [{ path: first.path, verdict: "unused" }],
+        },
+        recordedAt: now().toISOString(),
+      }),
+    ).toThrow("every selected memory");
+    expect(() => parseWikiMemoryEvaluationRecord({ ...helpful, digest: "0".repeat(64) })).toThrow(
+      "digest",
+    );
+  });
+
+  it("automatically binds relevant reviewed memory to an answer task", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    await writeMemoryPage(workspace.root, "playbook", "LLM Wiki Review", "active");
+
+    const task = await prepareWikiAnswerTask(
+      workspace,
+      answerTaskInput("How should LLM Wiki review work?"),
+    );
+
+    expect(task.memories.map(({ path }) => path)).toEqual(["pages/playbooks/llm-wiki-review.md"]);
+    expect(task.contexts.map(({ path }) => path)).toContain(task.memories[0]?.path);
+    expect(task.prompt).toContain("reviewed guidance");
+    expect(task.prompt).toContain("current request");
+    const selected = task.memories[0];
+    if (selected === undefined) throw new Error("Expected a selected memory");
+    expect(() =>
+      parseWikiAnswerTask({
+        ...task,
+        memories: [{ ...selected, sha256: "0".repeat(64) }],
+      }),
+    ).toThrow("memory");
+    expect(() =>
+      parseWikiAnswerTask({
+        ...task,
+        instructions: task.instructions.filter((instruction) => !instruction.includes("guidance")),
+      }),
+    ).toThrow("precedence");
+    expect(() => parseWikiAnswerTask({ ...task, memories: [selected, selected] })).toThrow(
+      "canonical",
+    );
+    await writeFile(
+      join(workspace.root, "wiki", selected.path),
+      `${task.contexts.find(({ path }) => path === selected.path)?.content}\nChanged.\n`,
+      "utf8",
+    );
+    await expect(validateCurrentWikiAnswerTask(workspace, task)).rejects.toThrow("stale");
+  });
+
+  it("records explicit usefulness observations and aggregates them without answer content", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    await writeMemoryPage(workspace.root, "failure", "LLM Wiki Scope Failure", "active");
+    const task = await prepareWikiAnswerTask(
+      workspace,
+      answerTaskInput("How should LLM Wiki handle a scope failure?"),
+    );
+    const memory = task.memories[0];
+    if (memory === undefined) throw new Error("Expected a selected memory");
+    const input = {
+      taskOutcome: "improved" as const,
+      assessments: [{ path: memory.path, verdict: "helpful" as const }],
+      note: "The correction prevented a scope mismatch.",
+    };
+
+    const record = await recordWikiMemoryEvaluation(workspace, task, input, now());
+    const summary = await summarizeWikiMemoryEvaluations(workspace);
+
+    expect(parseWikiMemoryEvaluationInput(input)).toEqual(input);
+    expect(parseWikiMemoryEvaluationRecord(record)).toEqual(record);
+    expect(summary).toMatchObject({
+      evaluations: 1,
+      selections: 1,
+      helpfulRate: 1,
+      harmfulRate: 0,
+      counts: { improved: 1, helpful: 1, harmful: 0 },
+      memories: [{ path: memory.path, selected: 1, helpful: 1 }],
+    });
+    const saved = await readFile(
+      join(workspace.root, "wiki", "raw", "evals", `${record.id}.json`),
+      "utf8",
+    );
+    expect(saved).not.toContain("Agents compile durable wiki pages");
+    expect(() => parseWikiMemoryEvaluationRecord({ ...record, extra: true })).toThrow("unknown");
+    await expect(
+      recordWikiMemoryEvaluation(workspace, task, {
+        ...input,
+        assessments: [{ path: "pages/failures/unselected.md", verdict: "helpful" }],
+      }),
+    ).rejects.toThrow("assess every selected memory");
+  });
+
+  it("binds a no-memory control and records a paired human comparison", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    await writeMemoryPage(workspace.root, "failure", "LLM Wiki Scope Failure", "active");
+    const task = await prepareWikiAnswerTask(
+      workspace,
+      answerTaskInput("How should LLM Wiki handle a scope failure?"),
+    );
+    const memory = task.memories[0];
+    if (memory === undefined) throw new Error("Expected a selected memory");
+    const control = await prepareWikiMemoryControlTask(workspace, task);
+    const memoryResult = answerResultForTask(task, "The answer keeps the requested scope.");
+    const controlResult = answerResultForTask(control, "The answer describes a generic process.");
+    const judgment = {
+      preference: "memory" as const,
+      assessments: [{ path: memory.path, verdict: "helpful" as const }],
+      note: "The memory arm follows the requested scope.",
+    };
+
+    expect(control.memories).toEqual([]);
+    expect(control.contexts.map(({ path }) => path)).not.toContain(memory.path);
+    expect(control.evidence).toEqual(task.evidence);
+    expect(control.question).toBe(task.question);
+    expect(control.instructions).not.toContainEqual(expect.stringContaining("guidance only"));
+    expect(parseWikiMemoryComparisonJudgmentInput(judgment)).toEqual(judgment);
+    await expect(
+      recordWikiMemoryComparison(
+        workspace,
+        {
+          task,
+          controlTask: { ...control, digest: "0".repeat(64) },
+          memoryResult,
+          controlResult,
+          judgment,
+        },
+        now(),
+      ),
+    ).rejects.toThrow();
+
+    const record = await recordWikiMemoryComparison(
+      workspace,
+      { task, controlTask: control, memoryResult, controlResult, judgment },
+      now(),
+    );
+    const summary = await summarizeWikiMemoryEvaluations(workspace);
+
+    expect(record).toMatchObject({
+      mode: "comparison",
+      taskOutcome: "improved",
+      comparison: {
+        controlTaskId: control.id,
+        controlTaskDigest: control.digest,
+        preference: "memory",
+      },
+    });
+    expect(summary).toMatchObject({
+      evaluations: 1,
+      comparisons: 1,
+      counts: { memoryPreferred: 1, controlPreferred: 0, tied: 0 },
+    });
   });
 
   it("rejects ambiguous or oversized task evidence", async () => {
@@ -555,6 +1396,7 @@ describe("wiki", () => {
       instructions: task.instructions,
       contexts: [source],
       evidence: task.evidence,
+      memories: [],
     });
 
     await expect(
@@ -584,6 +1426,152 @@ describe("wiki", () => {
     expect(task.prompt).not.toContain("Original source summary.");
     await expect(validateCurrentWikiRebuildTask(workspace, task)).resolves.toEqual(task);
     await expect(rebuildWikiState(workspace.root)).resolves.toEqual(before);
+  });
+
+  it("rebuilds a supported page without requiring a paired page kind", async () => {
+    const workspace = await tempWorkspace();
+    await prepareRebuildWiki(workspace.root);
+    await rm(pagePath(workspace.root));
+    await writeFile(
+      rebuildSourcePagePath(workspace.root),
+      renderWikiPage(
+        rebuildSourceMetadata(),
+        "## Summary\n\nOriginal source summary.\n\n## Key Claims\n\n- accepted: Original source claim.\n  source: raw/sources/karpathy-llm-wiki.md\n\n## Links\n",
+      ),
+    );
+    await writeFile(
+      join(workspace.root, "wiki", "index.md"),
+      "# Wiki Index\n\n- [LLM Wiki Source](pages/sources/llm-wiki-source.md)\n",
+      "utf8",
+    );
+
+    const task = await prepareWikiRebuildTask(workspace, rebuildTaskInput(), now());
+    const result = {
+      ...rebuildResult(task),
+      pages: rebuildResult(task).pages.map((page) => ({ ...page, links: [] })),
+    };
+    const report = await prepareWikiRebuildReport(workspace, task, result);
+
+    expect(task.targets.map((target) => target.path)).toEqual(["pages/sources/llm-wiki-source.md"]);
+    expect(report.files.map((file) => file.path)).toEqual(["pages/sources/llm-wiki-source.md"]);
+    expect(report.candidateDiagnostics.issues).toEqual([]);
+  });
+
+  it("rebuilds synthesis pages through validated document blocks", async () => {
+    const workspace = await tempWorkspace();
+    await prepareRebuildWiki(workspace.root);
+    const synthesisPath = join(
+      workspace.root,
+      "wiki",
+      "pages",
+      "syntheses",
+      "research-synthesis.md",
+    );
+    await writeFile(
+      synthesisPath,
+      renderWikiPage(
+        {
+          ...metadata(),
+          title: "Research Synthesis",
+          slug: "research-synthesis",
+          kind: "synthesis",
+        },
+        "## Conclusion\n\nBaseline synthesis.\n\n## Key Claims\n\n- accepted: Baseline synthesis claim.\n  source: raw/sources/karpathy-llm-wiki.md\n",
+      ),
+    );
+    const conceptPath = pagePath(workspace.root);
+    const concept = await readFile(conceptPath, "utf8");
+    await writeFile(
+      conceptPath,
+      concept.replace("- [[llm-wiki-source]]", "- [[llm-wiki-source]]\n- [[research-synthesis]]"),
+      "utf8",
+    );
+    const indexPath = join(workspace.root, "wiki", "index.md");
+    const index = await readFile(indexPath, "utf8");
+    await writeFile(
+      indexPath,
+      `${index}- [Research Synthesis](pages/syntheses/research-synthesis.md)\n`,
+      "utf8",
+    );
+
+    const task = await prepareWikiRebuildTask(workspace, rebuildTaskInput(), now());
+    const result = richSynthesisResult(task);
+    const report = await prepareWikiRebuildReport(workspace, task, result);
+    const candidate = report.files.find((file) => file.path.endsWith("research-synthesis.md"));
+
+    expect(task.targets.map((target) => target.kind)).toEqual(["concept", "source", "synthesis"]);
+    expect(task.prompt).not.toContain("Baseline synthesis.");
+    expect(candidate?.content).toContain("## Decision");
+    expect(candidate?.content).toContain("### Measure outcomes");
+    expect(candidate?.content).toContain("| Signal | Meaning \\| action |");
+    expect(candidate?.content).toContain("- hypothesis: Test the learning loop before scaling.");
+    expect(candidate?.content).toContain("source: raw/sources/karpathy-llm-wiki.md");
+    expect(report.candidateDiagnostics.issues).toEqual([]);
+  });
+
+  it("preserves and compares structured hypotheses without exposing the baseline body", async () => {
+    const workspace = await tempWorkspace();
+    await prepareRebuildWiki(workspace.root);
+    const sourcePath = rebuildSourcePagePath(workspace.root);
+    const source = await readFile(sourcePath, "utf8");
+    await writeFile(
+      sourcePath,
+      `${source}\n## Application Notes\n\n- hypothesis: Test before promotion.\n`,
+      "utf8",
+    );
+    const task = await prepareWikiRebuildTask(workspace, rebuildTaskInput(), now());
+
+    const result = {
+      ...rebuildResult(task),
+      pages: rebuildResult(task).pages.map((page) =>
+        page.path === "pages/sources/llm-wiki-source.md"
+          ? { ...page, hypotheses: ["Test before promotion."] }
+          : page,
+      ),
+    };
+    const report = await prepareWikiRebuildReport(workspace, task, result);
+    const comparison = report.comparisons.find(
+      (candidate) => candidate.path === "pages/sources/llm-wiki-source.md",
+    );
+
+    expect(comparison).toMatchObject({
+      baselineSections: ["Application Notes", "Key Claims", "Links", "Summary"],
+      candidateSections: ["Application Notes", "Key Claims", "Links", "Summary"],
+      missingSections: [],
+      addedSections: [],
+      baselineHypothesisCount: 1,
+      candidateHypothesisCount: 1,
+      retainedHypothesisCount: 1,
+      missingHypotheses: [],
+      addedHypotheses: [],
+    });
+    expect(task.prompt).not.toContain("Test before promotion.");
+  });
+
+  it("reports hypothesis loss even when the section shape remains otherwise valid", async () => {
+    const workspace = await tempWorkspace();
+    await prepareRebuildWiki(workspace.root);
+    const sourcePath = rebuildSourcePagePath(workspace.root);
+    const source = await readFile(sourcePath, "utf8");
+    await writeFile(
+      sourcePath,
+      `${source}\n## Application Notes\n\n- hypothesis: Test before promotion.\n`,
+      "utf8",
+    );
+    const task = await prepareWikiRebuildTask(workspace, rebuildTaskInput(), now());
+    const report = await prepareWikiRebuildReport(workspace, task, rebuildResult(task));
+    const comparison = report.comparisons.find(
+      (candidate) => candidate.path === "pages/sources/llm-wiki-source.md",
+    );
+
+    expect(comparison).toMatchObject({
+      baselineHypothesisCount: 1,
+      candidateHypothesisCount: 0,
+      retainedHypothesisCount: 0,
+      missingHypotheses: ["Test before promotion."],
+      addedHypotheses: [],
+      missingSections: ["Application Notes"],
+    });
   });
 
   it("rejects unsupported rebuild target kinds in self-consistent tasks", async () => {
@@ -851,6 +1839,45 @@ describe("wiki", () => {
       () => parseWikiRebuildTask({ ...task, id: `wiki-rebuild-${"0".repeat(64)}` }),
       () => parseWikiRebuildResult(null),
       () => parseWikiRebuildResult({ ...result, unexpected: true }),
+      () =>
+        parseWikiRebuildResult({
+          ...result,
+          pages: result.pages.map((page, index) =>
+            index === 0
+              ? {
+                  path: page.path,
+                  format: "document",
+                  sections: [
+                    {
+                      heading: "Invalid table",
+                      blocks: [
+                        { type: "table", columns: ["A", "B"], rows: [["one cell"]] },
+                        { type: "acceptedClaims", claims: [firstClaim] },
+                      ],
+                    },
+                  ],
+                }
+              : page,
+          ),
+        }),
+      () =>
+        parseWikiRebuildResult({
+          ...result,
+          pages: result.pages.map((page, index) =>
+            index === 0
+              ? {
+                  path: page.path,
+                  format: "document",
+                  sections: [
+                    {
+                      heading: "Missing claims",
+                      blocks: [{ type: "paragraph", text: "No accepted claim." }],
+                    },
+                  ],
+                }
+              : page,
+          ),
+        }),
       () => parseWikiRebuildResultForTask(task, { ...result, taskId: "wrong-task" }),
       () => parseWikiRebuildResultForTask(task, { ...result, pages: result.pages.slice(1) }),
       () =>
@@ -858,6 +1885,15 @@ describe("wiki", () => {
           ...result,
           pages: result.pages.map((page, index) =>
             index === 0 ? { ...page, acceptedClaims: [firstClaim, firstClaim] } : page,
+          ),
+        }),
+      () =>
+        parseWikiRebuildResultForTask(task, {
+          ...result,
+          pages: result.pages.map((page, index) =>
+            index === 0
+              ? { ...page, hypotheses: ["Repeated hypothesis.", "repeated  hypothesis."] }
+              : page,
           ),
         }),
       () =>
@@ -917,6 +1953,101 @@ describe("wiki", () => {
     await writeFile(rawSourcePath(workspace.root), "# Changed source\n", "utf8");
     await expect(prepareWikiRebuildReport(workspace, task, result)).rejects.toThrow("stale");
     await expect(stat(join(workspace.root, "wiki", "pages", "questions"))).resolves.toBeDefined();
+  });
+
+  it("applies only an exact reviewed rebuild report and records it once", async () => {
+    const workspace = await tempWorkspace();
+    await prepareRebuildWiki(workspace.root);
+    const task = await prepareWikiRebuildTask(workspace, rebuildTaskInput(), now());
+    const result = rebuildResult(task);
+    const report = await prepareWikiRebuildReport(workspace, task, result);
+    const before = await rebuildWikiState(workspace.root);
+
+    await expect(
+      applyWikiRebuild(
+        workspace,
+        rebuildApplication(task, result, report, {
+          ...rebuildApproval(report),
+          digest: "0".repeat(64),
+        }),
+        new Date("2026-06-17T13:00:00.000Z"),
+      ),
+    ).rejects.toThrow("does not match");
+    await expect(rebuildWikiState(workspace.root)).resolves.toEqual(before);
+
+    const alternativeResult = {
+      ...result,
+      pages: result.pages.map((page, index) =>
+        index === 0 ? { ...page, summary: "Different reviewed summary." } : page,
+      ),
+    };
+    const alternativeReport = await prepareWikiRebuildReport(workspace, task, alternativeResult);
+    await expect(
+      applyWikiRebuild(
+        workspace,
+        rebuildApplication(task, result, alternativeReport),
+        new Date("2026-06-17T13:00:00.000Z"),
+      ),
+    ).rejects.toThrow("does not match its task and result");
+    await expect(rebuildWikiState(workspace.root)).resolves.toEqual(before);
+
+    const applied = await applyWikiRebuild(
+      workspace,
+      rebuildApplication(task, result, report),
+      new Date("2026-06-17T13:00:00.000Z"),
+    );
+
+    expect(applied.reportId).toBe(report.id);
+    expect(applied.lint.issues).toEqual([]);
+    await expect(readFile(pagePath(workspace.root), "utf8")).resolves.toContain(
+      "Rebuilt concept claim.",
+    );
+    await expect(readFile(join(workspace.root, "wiki", "log.md"), "utf8")).resolves.toContain(
+      `rebuild | ${report.id} | digest=${report.digest}`,
+    );
+    await expect(
+      applyWikiRebuild(workspace, rebuildApplication(task, result, report)),
+    ).rejects.toThrow("already applied");
+  });
+
+  it("rejects a reviewed rebuild when its task becomes stale", async () => {
+    const workspace = await tempWorkspace();
+    await prepareRebuildWiki(workspace.root);
+    const task = await prepareWikiRebuildTask(workspace, rebuildTaskInput(), now());
+    const result = rebuildResult(task);
+    const report = await prepareWikiRebuildReport(workspace, task, result);
+    const before = await readFile(pagePath(workspace.root), "utf8");
+    await writeFile(rawSourcePath(workspace.root), "# Changed after review\n", "utf8");
+
+    await expect(
+      applyWikiRebuild(workspace, rebuildApplication(task, result, report)),
+    ).rejects.toThrow("stale");
+    await expect(readFile(pagePath(workspace.root), "utf8")).resolves.toBe(before);
+  });
+
+  it("does not promote a rebuild that fails current full-wiki lint", async () => {
+    const workspace = await tempWorkspace();
+    await prepareRebuildWiki(workspace.root);
+    const conceptPath = pagePath(workspace.root);
+    const concept = await readFile(conceptPath, "utf8");
+    await writeFile(
+      conceptPath,
+      concept.replace(
+        "updatedAt: 2026-06-17T12:00:00.000Z",
+        "updatedAt: 2026-06-17T12:00:00.000Z\nreviewAfter: 2026-06-18T12:00:00.000Z",
+      ),
+      "utf8",
+    );
+    const task = await prepareWikiRebuildTask(workspace, rebuildTaskInput(), now());
+    const result = rebuildResult(task);
+    const report = await prepareWikiRebuildReport(workspace, task, result);
+    const before = await rebuildWikiState(workspace.root);
+
+    expect(report.candidateDiagnostics.issues).toEqual([]);
+    await expect(
+      applyWikiRebuild(workspace, rebuildApplication(task, result, report)),
+    ).rejects.toThrow("lint issue");
+    await expect(rebuildWikiState(workspace.root)).resolves.toEqual(before);
   });
 
   it("prepares deterministic answer proposals without changing the live wiki", async () => {
@@ -1495,9 +2626,9 @@ function answerInput() {
   };
 }
 
-function answerTaskInput() {
+function answerTaskInput(question = "How does LLM Wiki work?") {
   return {
-    question: "How does LLM Wiki work?",
+    question,
     sourceIds: ["karpathy-llm-wiki"],
   };
 }
@@ -1518,26 +2649,107 @@ function answerTaskResult(task: WikiAnswerTask) {
   };
 }
 
+function answerResultForTask(task: WikiAnswerTask, summary: string) {
+  return { ...answerTaskResult(task), summary };
+}
+
 function rebuildTaskInput() {
   return { sourceIds: ["karpathy-llm-wiki"] };
 }
 
 function rebuildResult(task: WikiRebuildTask): WikiRebuildResult {
   return {
-    schemaVersion: "ai-lab.wiki-rebuild-result.v1",
+    schemaVersion: "ai-lab.wiki-rebuild-result.v3",
     taskId: task.id,
     taskDigest: task.digest,
-    pages: task.targets.map((target) => ({
+    pages: task.targets.map(rebuildResultPage),
+  };
+}
+
+function rebuildResultPage(target: WikiRebuildTask["targets"][number]) {
+  if (target.kind === "synthesis") {
+    return {
       path: target.path,
-      summary: target.kind === "concept" ? "Rebuilt concept summary." : "Original source summary.",
-      acceptedClaims: [
+      format: "document" as const,
+      sections: [
         {
-          text: target.kind === "concept" ? "Rebuilt concept claim." : "Original source claim.",
-          sourceId: "karpathy-llm-wiki",
+          heading: "Conclusion",
+          blocks: [
+            { type: "paragraph" as const, text: "Rebuilt synthesis." },
+            {
+              type: "acceptedClaims" as const,
+              claims: [{ text: "Rebuilt synthesis claim.", sourceId: "karpathy-llm-wiki" }],
+            },
+          ],
         },
       ],
-      links: [target.kind === "concept" ? "llm-wiki-source" : "llm-wiki"],
-    })),
+    };
+  }
+  return {
+    path: target.path,
+    format: "evidence" as const,
+    summary: target.kind === "concept" ? "Rebuilt concept summary." : "Original source summary.",
+    acceptedClaims: [
+      {
+        text: target.kind === "concept" ? "Rebuilt concept claim." : "Original source claim.",
+        sourceId: "karpathy-llm-wiki",
+      },
+    ],
+    hypotheses: [],
+    links: [target.kind === "concept" ? "llm-wiki-source" : "llm-wiki"],
+  };
+}
+
+function richSynthesisResult(task: WikiRebuildTask): WikiRebuildResult {
+  const result = rebuildResult(task);
+  return {
+    ...result,
+    pages: result.pages.map((page) => {
+      if (page.format === "document") return richDocumentPage(page.path);
+      return page.path.includes("/concepts/")
+        ? { ...page, links: [...page.links, "research-synthesis"] }
+        : page;
+    }),
+  };
+}
+
+function richDocumentPage(path: string): WikiRebuildResult["pages"][number] {
+  return {
+    path,
+    format: "document",
+    sections: [
+      {
+        heading: "Conclusion",
+        blocks: [
+          { type: "paragraph", text: "Own a complete learning loop." },
+          { type: "callout", text: "Records become useful when they change later action." },
+        ],
+      },
+      {
+        heading: "Decision",
+        blocks: [
+          { type: "subheading", text: "Measure outcomes" },
+          { type: "bullets", items: ["Record corrections.", "Connect them to results."] },
+          { type: "steps", items: ["Choose one task.", "Evaluate the result."] },
+          {
+            type: "table",
+            columns: ["Signal", "Meaning | action"],
+            rows: [["Correction", "Update the rule."]],
+          },
+          { type: "hypotheses", items: ["Test the learning loop before scaling."] },
+          {
+            type: "acceptedClaims",
+            claims: [
+              {
+                text: "A managed Wiki preserves reusable knowledge.",
+                sourceId: "karpathy-llm-wiki",
+              },
+            ],
+          },
+          { type: "links", slugs: ["llm-wiki"] },
+        ],
+      },
+    ],
   };
 }
 
@@ -1602,6 +2814,90 @@ function approval(proposal: WikiProposal, reviewedAt = "2026-06-17T12:30:00.000Z
   };
 }
 
+function rebuildApproval(report: { id: string; digest: string }) {
+  return {
+    reportId: report.id,
+    digest: report.digest,
+    accepted: true as const,
+    reviewedBy: "SeungIl",
+    reviewedAt: "2026-06-17T12:30:00.000Z",
+  };
+}
+
+function rebuildApplication(
+  task: WikiRebuildTask,
+  result: WikiRebuildResult,
+  report: { id: string; digest: string },
+  approval = rebuildApproval(report),
+) {
+  return { task, result, report, approval };
+}
+
+function reflectionInput() {
+  return {
+    runSummary: "The response answered a different memory scope.",
+    feedback: "Keep the scope the user requested.",
+    validation: "The mismatch is observable and repeatable.",
+    changedFiles: ["packages/wiki/src/index.ts"],
+  };
+}
+
+function reflectionResult(task: { id: string; digest: string }): WikiReflectionResult {
+  return {
+    schemaVersion: "ai-lab.wiki-reflection-result.v2",
+    taskId: task.id,
+    taskDigest: task.digest,
+    outcome: "propose",
+    rationale: "The correction is reusable.",
+    page: {
+      kind: "failure",
+      title: "Scope Mismatch",
+      slug: "scope-mismatch",
+      summary: "Answer the memory scope the user requested.",
+      retrievalTerms: ["requested memory scope", "요청한 기억 범위"],
+      failure: "The response replaced the requested scope with a generic process lesson.",
+      trigger: "A user asks what should be remembered from a conversation.",
+      correction: [
+        "Restate *exact* requested scope.",
+        "Classify candidates before proposing storage.",
+      ],
+      preventionChecks: ["Each candidate answers the stated scope."],
+      hypotheses: ["The mismatch may recur."],
+      links: [],
+    },
+  };
+}
+
+function reflectionApproval(report: { id: string; digest: string }) {
+  return {
+    reportId: report.id,
+    digest: report.digest,
+    accepted: true as const,
+    reviewedBy: "SeungIl",
+    reviewedAt: "2026-06-17T12:30:00.000Z",
+  };
+}
+
+function reflectionApplication(
+  task: unknown,
+  result: unknown,
+  report: { id: string; digest: string },
+  approval = reflectionApproval(report),
+) {
+  return { task, result, report, approval };
+}
+
+async function reflectionWikiState(root: string) {
+  return {
+    index: await readFile(join(root, "wiki", "index.md"), "utf8"),
+    log: await readFile(join(root, "wiki", "log.md"), "utf8"),
+    page: await readFile(
+      join(root, "wiki", "pages", "failures", "scope-mismatch.md"),
+      "utf8",
+    ).catch(() => null),
+  };
+}
+
 function tamperedProposals(proposal: WikiProposal): WikiProposal[] {
   const index = proposal.files.find((file) => file.path === "index.md");
   const page = proposalPage(proposal);
@@ -1663,6 +2959,34 @@ function indexWithPage(): string {
 
 async function writeRawSource(root: string): Promise<void> {
   await writeFile(rawSourcePath(root), "# Source\n");
+}
+
+async function writeMemoryPage(
+  root: string,
+  kind: "playbook" | "failure" | "decision",
+  title: string,
+  status: "active" | "superseded",
+  options: { readonly reviewAfter?: string } = {},
+): Promise<void> {
+  const slug = title.toLowerCase().replaceAll(" ", "-");
+  const directory =
+    kind === "playbook" ? "playbooks" : kind === "failure" ? "failures" : "decisions";
+  const metadata = {
+    title,
+    slug,
+    kind,
+    status,
+    createdAt: "2026-06-17T12:00:00.000Z",
+    updatedAt: "2026-06-17T12:00:00.000Z",
+    reviewAfter: options.reviewAfter ?? "2027-06-17T12:00:00.000Z",
+    retrievalTerms: [title],
+    sources: [],
+  };
+  await writeFile(
+    join(root, "wiki", "pages", directory, `${slug}.md`),
+    renderWikiPage(metadata, `## Summary\n\n${title} guidance.\n\n## Links\n\n`),
+    "utf8",
+  );
 }
 
 function pagePath(root: string): string {

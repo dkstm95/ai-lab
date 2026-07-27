@@ -1,15 +1,15 @@
 # Wiki Shadow Rebuild
 
 Shadow rebuild measures whether the current Wiki can be reconstructed from managed evidence without
-changing live pages. Version 1 supports existing `source` and `concept` pages.
+changing live pages. Version 3 supports existing `source`, `concept`, and `synthesis` pages.
 
 ## Why It Is Separate
 
-The answer workflow creates a reusable question page and can promote it after review. A rebuild has
-a different purpose: hide the existing page bodies, generate replacement candidates from source
-evidence, and compare them with the baseline.
+The answer workflow creates a reusable question page and can promote it after review. Rebuild hides
+existing page bodies, generates replacements from source evidence, and compares them with baseline.
 
-Shadow rebuild has no `apply` command. It does not update `index.md`, `log.md`, or live pages.
+Task, result, compare, and review do not update `index.md`, `log.md`, or live pages. Promotion is a
+separate digest-approved command.
 
 ## Manual Provider-Neutral Flow
 
@@ -27,6 +27,12 @@ pnpm cli wiki rebuild compare \
   --out karpathy-rebuild-report.json
 
 pnpm cli wiki rebuild review karpathy-rebuild-report.json
+
+pnpm cli wiki rebuild apply karpathy-rebuild-report.json \
+  --task karpathy-rebuild-task.json \
+  --result karpathy-rebuild-result.json \
+  --reviewer "<name>" \
+  --accept-digest "<full-reviewed-report-digest>"
 ```
 
 Artifacts live under `.ai-lab/wiki-exchange`. The task and result schemas do not name a provider,
@@ -39,13 +45,13 @@ The host, not the model, selects targets:
 
 1. Resolve the requested IDs to managed files under `raw/sources`.
 2. Find existing pages whose metadata cites at least one selected source.
-3. Keep only `source` and `concept` pages.
-4. Require at least one page of each kind and at most ten pages.
+3. Keep only `source`, `concept`, and `synthesis` pages.
+4. Require at least one supported page and at most ten pages.
 5. Sort targets by path.
 
-The result must return every target exactly once. It cannot add a path, choose another page kind,
-change metadata, or cite an unselected source. The candidate preserves each target's existing
-status, including `review` and `conflicted`; rebuild does not claim that those states were resolved.
+The result must return every target exactly once. It cannot add a path, choose another kind, change
+metadata, or cite an unselected source. The candidate preserves existing status, including `review`
+and `conflicted`. Any supported page-kind combination is valid.
 
 ## Task Binding
 
@@ -64,16 +70,12 @@ from the live Wiki and rejects any digest change as stale.
 
 ## Result Shape
 
-Each result page contains only:
+Evidence pages contain a host-selected path, summary, accepted claims, hypotheses, and Wiki links.
+Synthesis pages contain ordered sections built from validated paragraph, callout, list, subheading,
+table, accepted-claim, hypothesis, and link blocks.
 
-- its host-selected path;
-- a one-line plain-text summary;
-- one-line plain-text accepted claims with selected source IDs;
-- allowed Wiki links.
-
-The host renders frontmatter and markdown. This keeps model output from selecting paths, status,
-timestamps, or raw source references directly. Summary and claim text cannot contain Wiki-link
-syntax; links must use the validated `links` field.
+The host renders frontmatter and Markdown. The model cannot select paths, metadata, raw source
+paths, or Markdown structure. Accepted claims use selected source IDs; links use allowed slugs.
 
 ## Report
 
@@ -81,23 +83,58 @@ Comparison runs against a temporary copy of the complete Wiki. The report record
 
 - baseline and candidate SHA-256 values;
 - exact accepted claims retained, removed, and added;
+- exact hypotheses retained, removed, and added;
+- baseline, candidate, removed, and added second-level section headings;
 - baseline, candidate, removed, and added Wiki links;
 - baseline, candidate, and missing source paths;
 - baseline and candidate lint;
 - introduced and resolved lint issues;
 - the full candidate files and an exact report digest.
 
-Claim retention uses the same identity as deterministic Wiki lint: normalized claim text plus source
-path. It does not decide whether differently worded claims mean the same thing. Semantic quality,
-truth, and acceptable information loss remain human review decisions.
+Accepted claims use normalized text plus source path for identity; hypotheses use normalized text.
+Neither detects paraphrases. Quality, truth, section meaning, and acceptable loss remain review
+decisions.
+
+## Promotion
+
+Apply reparses the original task, result, and reviewed report, recreates the report from the current
+Wiki, and requires its digest to equal the accepted digest. This rechecks schema, index, sources,
+targets, candidate bytes, comparison, and lint immediately before promotion.
+
+Promotion replaces only host-selected pages and appends one audit entry to `log.md`. The shared
+transaction validates the complete candidate, rechecks live state, rolls back failed commits, and
+allows each report ID to be applied once.
+
+Missing sections or claims remain visible rather than being automatically rejected because a
+deliberate rewrite may remove them. Applying that loss requires explicit digest acceptance.
+
+## Evaluation Log
+
+The 2026-07-27 migration rehearsal used three independent managed source sets:
+
+- The Karpathy source and concept candidates passed structural and semantic review after a new
+  verification source scoped the index-first retrieval claim as an author-reported experience, not
+  a universal benchmark. Digest: `6a15cb39c1d880da4dc5e6d317b43b1177e689f3d695f08b3fc3bfbf2b8202fc`.
+- The Principal IC source and concept candidates passed after the main review restored distinct
+  practices concerning cross-functional scope, undervalued work, calibrated feedback, and making
+  room for others. Digest: `42faad44adf9b5f979630bc8cb2400e2e63e1ab461e34d6f59ba802cf3d9afce`.
+- The Understanding AI-generated Code version 1 candidate was held because the old contract could
+  not represent hypotheses. Version 2 restored that layer and passed semantic review. Digest:
+  `6ca9ac987915e22af8c5d4705a83c7e419f867d47d359cdef77b3a79f60eaf65`.
+- The AI data-learning synthesis passed after version 3 replaced flattened evidence output with
+  typed document blocks and restored the data-team role as an explicit hypothesis. Digest:
+  `7ba0d3b78d4c99c3b3d7265e6d5d94ed3e1ff3e9b6269256544fb11cd764c200`.
+
+Every baseline and candidate lint report was clean. Shadow operations did not change target pages
+or `index.md`.
+
+`memory-candidate-scope-mismatch` remains an approved legacy reflection. Its originating raw run
+was not retained, so rebuilding it from its own text would create circular evidence. New
+reflections must start from a digest-bound reflection task instead.
 
 ## Limitations
 
-- Version 1 does not rebuild synthesis, failure, decision, or other rich page kinds.
-- It renders a canonical summary, accepted-claims, and links layout.
+- Version 3 excludes source-free reflection pages; use the separate reflection flow.
+- Source and concept pages use a canonical evidence layout; syntheses use typed document blocks.
+- Older artifacts are rejected; regenerate them to bind the current semantic contract.
 - It does not execute a model itself or expose `rebuild run`.
-- It does not promote candidates.
-- A clean lint report proves structural consistency, not factual correctness.
-
-Promotion should be added only after repeated shadow runs establish acceptable source coverage and
-human reviewers can inspect multi-page changes safely.

@@ -12,9 +12,13 @@ import {
   PrepareWikiAnswerTaskTool,
   PrepareWikiEvolveTool,
   PrepareWikiIngestTool,
+  PrepareWikiMemoryContextTool,
   PrepareWikiQueryTool,
+  PrepareWikiReflectionTool,
   ProposeWikiAnswerTool,
+  ProposeWikiReflectionTool,
   RecordWikiRunTool,
+  SummarizeWikiMemoryEvaluationsTool,
   createWorkspaceTools,
 } from "../src/index.js";
 
@@ -53,9 +57,12 @@ describe("local tools", () => {
       "wiki.lint",
       "wiki.ingest.prepare",
       "wiki.query.prepare",
+      "wiki.memory.retrieve",
+      "wiki.memory.stats",
       "wiki.evolve.prepare",
       "wiki.run.record",
       "wiki.answer.propose",
+      "wiki.reflect.propose",
     ]);
   });
 
@@ -77,6 +84,14 @@ describe("local tools", () => {
     const query = await new PrepareWikiQueryTool(workspace).execute({
       name: "wiki.query.prepare",
       input: { question: "LLM Wiki" },
+    });
+    const memory = await new PrepareWikiMemoryContextTool(workspace).execute({
+      name: "wiki.memory.retrieve",
+      input: { query: "LLM Wiki" },
+    });
+    const memoryStats = await new SummarizeWikiMemoryEvaluationsTool(workspace).execute({
+      name: "wiki.memory.stats",
+      input: {},
     });
     const evolve = await new PrepareWikiEvolveTool(workspace).execute({
       name: "wiki.evolve.prepare",
@@ -121,6 +136,8 @@ describe("local tools", () => {
 
     expect((ingest.output as { task: string }).task).toBe("ingest");
     expect((query.output as { task: string }).task).toBe("query");
+    expect((memory.output as { memories: unknown[] }).memories).toEqual([]);
+    expect((memoryStats.output as { evaluations: number }).evaluations).toBe(0);
     expect((evolve.output as { task: string }).task).toBe("evolve");
     expect((lint.output as { issues: unknown[] }).issues).toEqual([]);
     expect((answer.output as { diagnostics: { issues: unknown[] } }).diagnostics.issues).toEqual(
@@ -148,5 +165,63 @@ describe("local tools", () => {
         },
       }),
     ).rejects.toThrow("wiki.answer.propose requires task");
+  });
+
+  it("exposes reflection preparation only through an explicitly selected trusted tool", async () => {
+    const workspace = await tempWorkspace();
+    await new InitWikiTool(workspace).execute({ name: "wiki.init", input: {} });
+    const run = await new RecordWikiRunTool(workspace).execute({
+      name: "wiki.run.record",
+      input: { task: "review", input: "correction", output: "validated" },
+    });
+    const runId = String((run.output as { id: string }).id);
+
+    const task = await new PrepareWikiReflectionTool(workspace).execute({
+      name: "wiki.reflect.prepare",
+      input: {
+        runId,
+        feedback: "Remember this correction.",
+        validation: "It is reusable.",
+        changedFiles: [],
+      },
+    });
+    const reflectionTask = task.output as { id: string; digest: string };
+    const report = await new ProposeWikiReflectionTool(workspace).execute({
+      name: "wiki.reflect.propose",
+      input: {
+        task: task.output,
+        result: {
+          schemaVersion: "ai-lab.wiki-reflection-result.v2",
+          taskId: reflectionTask.id,
+          taskDigest: reflectionTask.digest,
+          outcome: "propose",
+          rationale: "The correction is reusable.",
+          page: {
+            kind: "failure",
+            title: "Scope Mismatch",
+            slug: "scope-mismatch",
+            summary: "Answer the requested scope.",
+            retrievalTerms: ["requested scope", "요청한 범위"],
+            failure: "The response answered a different scope.",
+            trigger: "A request can refer to more than one memory layer.",
+            correction: ["Restate the requested scope."],
+            preventionChecks: ["The response answers the stated scope."],
+            hypotheses: [],
+            links: [],
+          },
+        },
+      },
+    });
+
+    expect((task.output as { evidence: { id: string } }).evidence.id).toBe(runId);
+    expect(
+      (report.output as { candidateDiagnostics: { issues: unknown[] } }).candidateDiagnostics,
+    ).toMatchObject({ issues: [] });
+    expect(createWorkspaceTools(workspace).map((tool) => tool.definition.name)).not.toContain(
+      "wiki.reflect.prepare",
+    );
+    await expect(
+      readFile(join(workspace.root, "wiki", "pages", "failures", "scope-mismatch.md"), "utf8"),
+    ).rejects.toThrow();
   });
 });

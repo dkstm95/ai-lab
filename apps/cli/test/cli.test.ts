@@ -1,5 +1,15 @@
 import { writeFileSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +22,8 @@ import type {
   WikiRebuildReport,
   WikiRebuildResult,
   WikiRebuildTask,
+  WikiReflectionReport,
+  WikiReflectionTask,
 } from "@ai-lab/agent-runtime";
 import { externalRunnerFileSha256 } from "@ai-lab/agent-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -19,6 +31,7 @@ import { runCli } from "../src/index.js";
 import {
   formatWikiProposalReview,
   formatWikiRebuildReview,
+  formatWikiReflectionReview,
   wikiRunnerConfigDigest,
 } from "../src/wiki.js";
 
@@ -159,6 +172,241 @@ describe("cli", () => {
     );
   });
 
+  it("retrieves, injects, and evaluates reviewed Wiki memory without a model API", async () => {
+    const root = await tempRoot();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    await writeFile(join(root, "source.md"), "# Research\nDurable knowledge is reusable.\n");
+    await runCli(["node", "ai-lab", "wiki", "init"], root);
+    await runCli(
+      ["node", "ai-lab", "wiki", "source", "add", "source.md", "--title", "Research"],
+      root,
+    );
+    const source = loggedJson<{ id: string }>(log);
+    await writeFile(
+      join(root, "wiki", "pages", "playbooks", "durable-knowledge-review.md"),
+      memoryPage(),
+      "utf8",
+    );
+
+    await runCli(
+      [
+        "node",
+        "ai-lab",
+        "wiki",
+        "memory",
+        "retrieve",
+        "durable knowledge",
+        "--out",
+        "memory-context.json",
+      ],
+      root,
+    );
+    const context = await artifact<{ memories: { path: string }[] }>(root, "memory-context.json");
+    expect(context.memories.map(({ path }) => path)).toEqual([
+      "pages/playbooks/durable-knowledge-review.md",
+    ]);
+    await runCli(["node", "ai-lab", "wiki", "memory", "retrieve", "durable knowledge"], root);
+    expect(loggedJson<{ memories: { content: string }[] }>(log).memories[0]?.content).toContain(
+      "Review durable knowledge",
+    );
+
+    await runCli(
+      [
+        "node",
+        "ai-lab",
+        "wiki",
+        "answer",
+        "task",
+        "What is durable knowledge?",
+        "--sources",
+        source.id,
+        "--out",
+        "memory-task.json",
+      ],
+      root,
+    );
+    const task = await artifact<WikiAnswerTask>(root, "memory-task.json");
+    const selected = task.memories[0];
+    if (selected === undefined) throw new Error("Expected a selected memory");
+    await writeFile(
+      join(root, ".ai-lab", "wiki-exchange", "memory-evaluation.json"),
+      `${JSON.stringify({
+        taskOutcome: "improved",
+        assessments: [{ path: selected.path, verdict: "helpful" }],
+      })}\n`,
+      { mode: 0o600 },
+    );
+    await runCli(
+      [
+        "node",
+        "ai-lab",
+        "wiki",
+        "memory",
+        "evaluate",
+        "--task",
+        "memory-task.json",
+        "--input",
+        "memory-evaluation.json",
+      ],
+      root,
+    );
+    await runCli(
+      [
+        "node",
+        "ai-lab",
+        "wiki",
+        "memory",
+        "control",
+        "--task",
+        "memory-task.json",
+        "--out",
+        "control-task.json",
+      ],
+      root,
+    );
+    const control = await artifact<WikiAnswerTask>(root, "control-task.json");
+    await Promise.all([
+      writeFile(
+        join(root, ".ai-lab", "wiki-exchange", "memory-result.json"),
+        `${JSON.stringify(answerResult(task, source.id, "The answer uses the review."))}\n`,
+        { mode: 0o600 },
+      ),
+      writeFile(
+        join(root, ".ai-lab", "wiki-exchange", "control-result.json"),
+        `${JSON.stringify(answerResult(control, source.id, "The answer omits the review."))}\n`,
+        { mode: 0o600 },
+      ),
+      writeFile(
+        join(root, ".ai-lab", "wiki-exchange", "comparison.json"),
+        `${JSON.stringify({
+          preference: "memory",
+          assessments: [{ path: selected.path, verdict: "helpful" }],
+        })}\n`,
+        { mode: 0o600 },
+      ),
+    ]);
+    await runCli(
+      [
+        "node",
+        "ai-lab",
+        "wiki",
+        "memory",
+        "compare",
+        "--task",
+        "memory-task.json",
+        "--control-task",
+        "control-task.json",
+        "--result",
+        "memory-result.json",
+        "--control-result",
+        "control-result.json",
+        "--input",
+        "comparison.json",
+      ],
+      root,
+    );
+    await runCli(["node", "ai-lab", "wiki", "memory", "stats"], root);
+
+    expect(loggedJson<{ evaluations: number; helpfulRate: number }>(log)).toMatchObject({
+      evaluations: 2,
+      comparisons: 1,
+      helpfulRate: 1,
+      counts: { memoryPreferred: 1 },
+    });
+    await expect(readdir(join(root, "wiki", "raw", "evals"))).resolves.toHaveLength(2);
+  });
+
+  it("prepares a private provider-neutral reflection artifact from explicit input", async () => {
+    const root = await tempRoot();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    await runCli(["node", "ai-lab", "wiki", "init"], root);
+    const exchange = join(root, ".ai-lab", "wiki-exchange");
+    await mkdir(exchange, { recursive: true, mode: 0o700 });
+    await writeFile(
+      join(exchange, "reflection-input.json"),
+      `${JSON.stringify({
+        runSummary: "The response answered a different memory scope.",
+        feedback: "Keep the scope the user requested.",
+        validation: "The mismatch is observable and repeatable.",
+        changedFiles: ["docs/self-evolution-guide.md"],
+      })}\n`,
+      { encoding: "utf8", mode: 0o600 },
+    );
+
+    await runCli(
+      [
+        "node",
+        "ai-lab",
+        "wiki",
+        "reflect",
+        "prepare",
+        "--input",
+        "reflection-input.json",
+        "--out",
+        "reflection-task.json",
+      ],
+      root,
+    );
+    const task = await artifact<WikiReflectionTask>(root, "reflection-task.json");
+
+    expect(task.id).toBe(`wiki-reflection-${task.digest}`);
+    expect(task.evidence.kind).toBe("provided-summary");
+    expect(task.contexts.map(({ path }) => path)).toEqual(["index.md", "schema.md"]);
+    expect(loggedJson<{ artifact: string }>(log).artifact).toBe(
+      ".ai-lab/wiki-exchange/reflection-task.json",
+    );
+    await writeFile(
+      join(exchange, "reflection-result.json"),
+      `${JSON.stringify(reflectionResult(task))}\n`,
+      { encoding: "utf8", mode: 0o600 },
+    );
+    await runCli(
+      [
+        "node",
+        "ai-lab",
+        "wiki",
+        "reflect",
+        "propose",
+        "--task",
+        "reflection-task.json",
+        "--result",
+        "reflection-result.json",
+        "--out",
+        "reflection-report.json",
+      ],
+      root,
+    );
+    const report = await artifact<WikiReflectionReport>(root, "reflection-report.json");
+    await expect(
+      stat(join(root, "wiki", "pages", "failures", "scope-mismatch.md")),
+    ).rejects.toThrow();
+    await runCli(["node", "ai-lab", "wiki", "reflect", "review", "reflection-report.json"], root);
+    expect(String(log.mock.calls.at(-1)?.[0])).toContain(`Digest: ${report.digest}`);
+    expect(formatWikiReflectionReview({ ...report, rationale: "\u202e" })).toContain("\\u202e");
+    await runCli(
+      [
+        "node",
+        "ai-lab",
+        "wiki",
+        "reflect",
+        "apply",
+        "reflection-report.json",
+        "--task",
+        "reflection-task.json",
+        "--result",
+        "reflection-result.json",
+        "--reviewer",
+        "Reviewer",
+        "--accept-digest",
+        report.digest,
+      ],
+      root,
+    );
+    await expect(
+      readFile(join(root, "wiki", "pages", "failures", "scope-mismatch.md"), "utf8"),
+    ).resolves.toContain("## Correction");
+  });
+
   it("runs a trusted external runner without exposing private runner inputs", async () => {
     const root = await tempRoot();
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -266,7 +514,7 @@ describe("cli", () => {
     );
   });
 
-  it("compares a manual shadow rebuild without changing the live Wiki", async () => {
+  it("applies a manual shadow rebuild only after exact report review", async () => {
     const root = await tempRoot();
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     await writeFile(join(root, "source.md"), "# Research\nDurable knowledge is reusable.\n");
@@ -322,8 +570,53 @@ describe("cli", () => {
     expect(formatWikiRebuildReview({ ...report, taskId: "\u202e" })).toContain("\\u202e");
     await expect(rebuildLiveWikiState(root)).resolves.toEqual(before);
     await expect(
-      runCli(["node", "ai-lab", "wiki", "rebuild", "apply", "rebuild-report.json"], root),
-    ).rejects.toThrow("Unknown wiki command");
+      runCli(
+        [
+          "node",
+          "ai-lab",
+          "wiki",
+          "rebuild",
+          "apply",
+          "rebuild-report.json",
+          "--task",
+          "rebuild-task.json",
+          "--result",
+          "rebuild-result.json",
+          "--reviewer",
+          "Reviewer",
+          "--accept-digest",
+          "f".repeat(64),
+        ],
+        root,
+      ),
+    ).rejects.toThrow("does not match");
+    await expect(rebuildLiveWikiState(root)).resolves.toEqual(before);
+
+    await runCli(
+      [
+        "node",
+        "ai-lab",
+        "wiki",
+        "rebuild",
+        "apply",
+        "rebuild-report.json",
+        "--task",
+        "rebuild-task.json",
+        "--result",
+        "rebuild-result.json",
+        "--reviewer",
+        "Reviewer",
+        "--accept-digest",
+        report.digest,
+      ],
+      root,
+    );
+    await expect(readFile(join(root, "wiki", "log.md"), "utf8")).resolves.toContain(
+      `rebuild | ${report.id} | digest=${report.digest}`,
+    );
+    await expect(
+      readFile(join(root, "wiki", task.targets[0]?.path ?? ""), "utf8"),
+    ).resolves.toContain("Rebuilt");
   });
 
   it("does not spawn when a trusted static file changes after disclosure", async () => {
@@ -754,7 +1047,7 @@ async function writeRebuildResult(
   sourceId: string,
 ): Promise<void> {
   const result: WikiRebuildResult = {
-    schemaVersion: "ai-lab.wiki-rebuild-result.v1",
+    schemaVersion: "ai-lab.wiki-rebuild-result.v3",
     taskId: task.id,
     taskDigest: task.digest,
     pages: task.targets.map((target) => rebuildResultPage(target, sourceId)),
@@ -770,10 +1063,12 @@ function rebuildResultPage(target: WikiRebuildTask["targets"][number], sourceId:
   const concept = target.kind === "concept";
   return {
     path: target.path,
+    format: "evidence" as const,
     summary: concept ? "Rebuilt concept." : "Rebuilt source.",
     acceptedClaims: [
       { text: concept ? "Rebuilt concept claim." : "Rebuilt source claim.", sourceId },
     ],
+    hypotheses: [],
     links: [concept ? "research-source" : "research-concept"],
   };
 }
@@ -830,16 +1125,66 @@ async function writeResult(
 ): Promise<void> {
   await writeFile(
     join(root, ".ai-lab", "wiki-exchange", "result.json"),
-    `${JSON.stringify({
-      schemaVersion: "ai-lab.wiki-answer-result.v1",
-      taskId: task.id,
-      taskDigest: task.digest,
-      question: task.question,
-      summary,
-      acceptedClaims: [{ text: "Durable knowledge remains reusable.", sourceId }],
-    })}\n`,
+    `${JSON.stringify(answerResult(task, sourceId, summary))}\n`,
     { mode: 0o600 },
   );
+}
+
+function answerResult(task: WikiAnswerTask, sourceId: string, summary: string): WikiAnswerResult {
+  return {
+    schemaVersion: "ai-lab.wiki-answer-result.v1",
+    taskId: task.id,
+    taskDigest: task.digest,
+    question: task.question,
+    summary,
+    acceptedClaims: [{ text: "Durable knowledge remains reusable.", sourceId }],
+  };
+}
+
+function reflectionResult(task: WikiReflectionTask) {
+  return {
+    schemaVersion: "ai-lab.wiki-reflection-result.v2",
+    taskId: task.id,
+    taskDigest: task.digest,
+    outcome: "propose",
+    rationale: "The correction is reusable.",
+    page: {
+      kind: "failure",
+      title: "Scope Mismatch",
+      slug: "scope-mismatch",
+      summary: "Answer the requested scope.",
+      retrievalTerms: ["requested scope", "요청한 범위"],
+      failure: "The response answered a different scope.",
+      trigger: "A request can refer to more than one memory layer.",
+      correction: ["Restate the requested scope."],
+      preventionChecks: ["The response answers the stated scope."],
+      hypotheses: [],
+      links: [],
+    },
+  };
+}
+
+function memoryPage(): string {
+  return `---
+title: Durable Knowledge Review
+slug: durable-knowledge-review
+kind: playbook
+status: active
+createdAt: 2026-06-17T12:00:00.000Z
+updatedAt: 2026-06-17T12:00:00.000Z
+reviewAfter: 2027-06-17T12:00:00.000Z
+retrievalTerms:
+  - durable knowledge review
+sources:
+---
+
+## Summary
+
+Review durable knowledge before reuse.
+
+## Links
+
+`;
 }
 
 function questionPath(root: string): string {

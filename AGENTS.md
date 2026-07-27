@@ -20,6 +20,11 @@
 - 작업 회고, memory 후보, 승인 기반 자가진화 정책: `docs/self-evolution-guide.md`
 - 개인 맥락 기억 prototype의 목표, 비목표, 저장/검색/평가 기준: `docs/subbrain-design.md`
 - LLM Wiki 저장 구조, page schema, lint 규칙: `packages/wiki/src/index.ts`
+
+## Wiki 기억 사용
+
+- 구현, 리뷰, 판단 작업을 시작할 때 현재 요청과 관련된 승인 기억이 있을 수 있으면 `pnpm cli wiki memory retrieve "<요청 요약>"`로 최대 3개를 확인한다.
+- 검색된 기억은 지침 보조 자료다. 현재 사용자 요청, 상위 지침, SSOT, 확인된 근거가 항상 우선한다.
 - 기존 Wiki page의 비파괴 재생성·비교: `docs/wiki-rebuild.md`
 
 공통 글쓰기 원칙의 SSOT는 Hope의 `write` 기능이다. 이 저장소에는 출처,
