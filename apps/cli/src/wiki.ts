@@ -8,6 +8,7 @@ import {
   type WikiAnswerRunnerResult,
   type WikiAnswerTask,
   WikiAnswerWorkflow,
+  WikiKnowledgeWorkflow,
   type WikiMemoryComparisonRunInput,
   WikiMemoryWorkflow,
   type WikiProposal,
@@ -142,9 +143,14 @@ async function dispatchWikiCommand(
     return answerReviewCommand(root, args[2] ?? "");
   if (route === "answer apply" && args.length === 3)
     return answerApplyCommand(root, args[2] ?? "", options);
-  if (route.startsWith("rebuild ") || route.startsWith("reflect ") || route.startsWith("memory "))
-    return dispatchWikiMaintenanceCommand(root, args, options);
+  if (maintenanceRoute(route)) return dispatchWikiMaintenanceCommand(root, args, options);
   throw new Error(`Unknown wiki command: wiki ${args.join(" ")}`);
+}
+
+function maintenanceRoute(route: string): boolean {
+  return ["rebuild ", "reflect ", "knowledge ", "memory "].some((prefix) =>
+    route.startsWith(prefix),
+  );
 }
 
 async function dispatchWikiMaintenanceCommand(
@@ -167,6 +173,8 @@ async function dispatchWikiMaintenanceCommand(
     return reflectionReviewCommand(root, args[2] ?? "");
   if (route === "reflect apply" && args.length === 3)
     return reflectionApplyCommand(root, args[2] ?? "", options);
+  if (route === "knowledge retrieve" && args.length === 3)
+    return knowledgeRetrieveCommand(root, args[2] ?? "", options);
   return dispatchWikiMemoryCommand(root, args, options);
 }
 
@@ -217,7 +225,7 @@ async function answerTaskCommand(
 function taskInput(question: string, options: TaskOptions) {
   const input = {
     question,
-    sourceIds: sourceIds(requiredText(options.sources, "--sources")),
+    sourceIds: options.sources === undefined ? [] : sourceIds(options.sources),
   };
   return options.title === undefined ? input : { ...input, title: options.title };
 }
@@ -550,6 +558,38 @@ async function memoryRetrieveCommand(
   console.log(JSON.stringify(memoryContextSummary(context, artifact), null, 2));
 }
 
+async function knowledgeRetrieveCommand(
+  root: string | undefined,
+  query: string,
+  options: TaskOptions,
+): Promise<void> {
+  const context = await knowledgeWorkflow(root).prepareContext(query);
+  if (options.out === undefined) {
+    console.log(JSON.stringify(context, null, 2));
+    return;
+  }
+  const artifact = await writeArtifact(workspaceRoot(root), options.out, context);
+  console.log(JSON.stringify(knowledgeContextSummary(context, artifact), null, 2));
+}
+
+function knowledgeContextSummary(
+  context: Awaited<ReturnType<WikiKnowledgeWorkflow["prepareContext"]>>,
+  artifact: string,
+) {
+  return {
+    artifact,
+    id: context.id,
+    digest: context.digest,
+    knowledge: context.knowledge.map(({ path, kind, score, matchedTerms, sources }) => ({
+      path,
+      kind,
+      score,
+      matchedTerms,
+      sources,
+    })),
+  };
+}
+
 function memoryContextSummary(
   context: Awaited<ReturnType<WikiMemoryWorkflow["prepareContext"]>>,
   artifact: string,
@@ -650,6 +690,12 @@ function reflectionWorkflow(root?: string): WikiReflectionWorkflow {
 
 function memoryWorkflow(root?: string): WikiMemoryWorkflow {
   return new WikiMemoryWorkflow(
+    root === undefined ? createDefaultWorkspace() : createWorkspace(root),
+  );
+}
+
+function knowledgeWorkflow(root?: string): WikiKnowledgeWorkflow {
+  return new WikiKnowledgeWorkflow(
     root === undefined ? createDefaultWorkspace() : createWorkspace(root),
   );
 }

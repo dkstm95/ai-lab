@@ -35,7 +35,7 @@ Read schema.md, index.md, then one raw source. Preserve source coverage before c
 
 ## Query
 
-Read index.md first, then relevant pages. Answer with citations to wiki pages or raw sources. Prepare reusable answers as proposals with explicit claim/source pairs. Do not promote them before approval.
+Retrieve at most five relevant active source, concept, entity, synthesis, or question pages whose review date has not expired. Use them as navigation and synthesis context, then bind their raw sources as citable evidence. A compiled page does not itself prove a factual claim. Explicit source IDs add evidence but are not required when retrieved pages provide it. Prepare reusable answers as proposals with explicit claim/source pairs. Do not promote them before approval.
 
 ## Evolve
 

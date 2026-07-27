@@ -8,6 +8,7 @@ import {
 import type { AgentRunRequest, AgentRunResult, ToolResult } from "@ai-lab/protocol";
 
 export { WikiAnswerWorkflow } from "./wiki-workflow.js";
+export { WikiKnowledgeWorkflow } from "./wiki-knowledge-workflow.js";
 export { WikiMemoryWorkflow } from "./wiki-memory-workflow.js";
 export type { WikiMemoryComparisonRunInput } from "./wiki-memory-workflow.js";
 export { WikiRebuildWorkflow } from "./wiki-rebuild-workflow.js";
@@ -42,6 +43,7 @@ export type {
   WikiMemoryEvaluationInput,
   WikiMemoryEvaluationRecord,
   WikiMemoryEvaluationSummary,
+  WikiKnowledgeContext,
 } from "@ai-lab/wiki";
 
 export interface AgentRuntime {

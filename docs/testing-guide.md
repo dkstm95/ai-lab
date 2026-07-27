@@ -28,6 +28,10 @@ creation and proposal preparation leave the live Wiki unchanged, stale or forged
 source IDs remain bound to selected evidence, and only an exact human-approved digest is promoted.
 CLI tests must not open a browser, call an API, or invoke a subscription tool.
 
+Knowledge tests verify active and review-date eligibility, deterministic field-weighted ranking,
+Korean suffix normalization, the five-page limit, raw-source expansion, answer-task binding, and
+stale page rejection. Compiled pages guide synthesis but cannot replace bound raw evidence.
+
 Memory tests verify active and review-date eligibility, reviewed multilingual retrieval terms,
 deterministic relevance ranking, the three-page limit, answer-task injection, stale hashes, exact
 per-page assessments, digest-bound no-memory controls, paired result hashes and preferences, and

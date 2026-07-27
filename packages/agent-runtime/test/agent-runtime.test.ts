@@ -17,6 +17,7 @@ import {
   DefaultAgentRuntime,
   type ExternalRunnerConfig,
   WikiAnswerWorkflow,
+  WikiKnowledgeWorkflow,
   WikiMemoryWorkflow,
   WikiReflectionWorkflow,
   createDefaultAgentRuntime,
@@ -98,6 +99,16 @@ describe("agent runtime", () => {
     );
     const query = await prepareWikiQuery(workspace, "durable knowledge");
     expect(query.contextFiles).toContain("pages/questions/what-is-durable-knowledge.md");
+    const knowledge = await new WikiKnowledgeWorkflow(workspace).prepareContext(
+      "durable knowledge",
+      now(),
+    );
+    expect(knowledge.knowledge.map(({ path }) => path)).toContain(
+      "pages/questions/what-is-durable-knowledge.md",
+    );
+    await expect(
+      new WikiKnowledgeWorkflow(workspace).validateContext(knowledge, now()),
+    ).resolves.toEqual(knowledge);
   });
 
   it("prepares and applies reviewed provider-neutral reflections without invoking a model", async () => {

@@ -7,6 +7,7 @@ import {
   prepareWikiAnswerTask,
   prepareWikiEvolve,
   prepareWikiIngest,
+  prepareWikiKnowledgeContext,
   prepareWikiMemoryContext,
   prepareWikiQuery,
   prepareWikiReflectionReport,
@@ -120,6 +121,20 @@ export class PrepareWikiMemoryContextTool implements LocalTool {
   }
 }
 
+export class PrepareWikiKnowledgeContextTool implements LocalTool {
+  readonly definition = {
+    name: "wiki.knowledge.retrieve",
+    description: "Retrieves at most five active, relevant Wiki knowledge pages.",
+  };
+
+  constructor(private readonly workspace: Workspace) {}
+
+  async execute(call: ToolCall): Promise<ToolResult> {
+    const context = await prepareWikiKnowledgeContext(this.workspace, requiredInput(call, "query"));
+    return { name: this.definition.name, output: context };
+  }
+}
+
 export class SummarizeWikiMemoryEvaluationsTool implements LocalTool {
   readonly definition = {
     name: "wiki.memory.stats",
@@ -199,7 +214,7 @@ export class RecordWikiRunTool implements LocalTool {
 export class PrepareWikiAnswerTaskTool implements LocalTool {
   readonly definition = {
     name: "wiki.answer.prepare",
-    description: "Creates a portable, source-bound answer task for an LLM Wiki.",
+    description: "Creates a portable, knowledge-retrieved and source-bound LLM Wiki answer task.",
   };
 
   constructor(private readonly workspace: Workspace) {}
@@ -238,6 +253,7 @@ export function createWikiTools(workspace: Workspace): LocalTool[] {
     new LintWikiTool(workspace),
     new PrepareWikiIngestTool(workspace),
     new PrepareWikiQueryTool(workspace),
+    new PrepareWikiKnowledgeContextTool(workspace),
     new PrepareWikiMemoryContextTool(workspace),
     new SummarizeWikiMemoryEvaluationsTool(workspace),
     new PrepareWikiEvolveTool(workspace),
@@ -259,15 +275,16 @@ function wikiAnswerTaskInput(call: ToolCall) {
   const title = optionalInput(call, "title");
   const input = {
     question: requiredInput(call, "question"),
-    sourceIds: requiredStringList(call, "sourceIds"),
+    sourceIds: optionalStringList(call, "sourceIds"),
   };
   return title === undefined ? input : { ...input, title };
 }
 
-function requiredStringList(call: ToolCall, key: string): string[] {
+function optionalStringList(call: ToolCall, key: string): string[] {
   const value = call.input[key];
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new Error(`${call.name} requires ${key}`);
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new Error(`${call.name} requires ${key} to be a string list`);
   }
   return value.map((item) => requiredStringItem(call, key, item));
 }

@@ -9,6 +9,7 @@ const requiredFiles = [
   "docs/development-guide.md",
   "docs/testing-guide.md",
   "docs/contribution-guide.md",
+  "docs/wiki-knowledge.md",
   "docs/wiki-rebuild.md",
   "package.json",
 ];
@@ -117,6 +118,7 @@ for (const file of [
   "docs/development-guide.md",
   "docs/testing-guide.md",
   "docs/contribution-guide.md",
+  "docs/wiki-knowledge.md",
   "docs/wiki-rebuild.md",
 ]) {
   assert(docs.agents.includes(file), `AGENTS.md must include ${file} in the document map`);

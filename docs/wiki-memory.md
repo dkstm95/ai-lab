@@ -4,7 +4,8 @@
 
 Approved reflection pages become useful only when later work can find them. The memory flow selects
 reviewed guidance before a Wiki answer task, binds the exact selection to the task, and records
-explicit observations after the task.
+explicit observations after the task. Evidence-bearing pages use the separate knowledge flow in
+`wiki-knowledge.md`; memory pages cannot replace factual evidence.
 
 The flow is provider-neutral. Retrieval and evaluation are deterministic host operations and do not
 call a model API, subscription CLI, browser, or network.

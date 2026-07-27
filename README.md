@@ -55,8 +55,8 @@ portable answer workflow does not call a model API or depend on one AI vendor:
 ```bash
 pnpm cli wiki init
 pnpm cli wiki source add notes.md --title "Research notes"
-pnpm cli wiki answer task "What should remain reusable?" \
-  --sources <source-id> --out task.json
+pnpm cli wiki knowledge retrieve "What creates durable advantage?"
+pnpm cli wiki answer task "What creates durable advantage?" --out task.json
 
 # Give the prompt in .ai-lab/wiki-exchange/task.json to any AI.
 # Save its JSON response as .ai-lab/wiki-exchange/result.json.
@@ -80,8 +80,9 @@ pnpm cli wiki answer apply proposal.json \
   --reviewer "<name>" --accept-digest "<full-reviewed-digest>"
 ```
 
-The task artifact contains the selected sources, the Wiki schema and index, and up to five matched
-pages. Inspect the disclosure before sharing them with a subscription service or another model.
+The answer task retrieves up to five active knowledge pages and binds their raw sources as citable
+evidence. `--sources <source-id>` remains an optional, additive override. The task also contains the
+Wiki schema and index. Inspect the disclosure before sharing it with another service or model.
 The same strict result schema works with web subscriptions, local models, and trusted runner
 wrappers. Task and proposal creation do not change live Wiki pages. The host-side runner workflow
 only creates a result artifact; proposal and apply remain separate commands.
@@ -108,9 +109,9 @@ Existing source and concept pages can also be regenerated as non-mutating shadow
 compared with their baseline, and promoted only from an exact digest-approved task, result, and
 report. See `docs/wiki-rebuild.md`.
 
-Trusted integrations own source selection. Agent-safe tools cannot import sources, create outbound
-tasks, or apply proposals. The package rejects traversal, symbolic links, stale tasks, unknown
-evidence IDs, oversized artifacts, and malformed exchange data.
+Trusted integrations own explicit source overrides. Agent-safe tools cannot import sources, create
+outbound tasks, or apply proposals. The package rejects traversal, symbolic links, stale tasks,
+unknown evidence IDs, oversized artifacts, and malformed exchange data.
 
 Implement reusable code in `packages/*`, expose human-facing flows from `apps/cli` or `apps/service` only when they are meant for people, and keep provider-specific SDK details inside `packages/model-providers`.
 
@@ -123,6 +124,7 @@ Implement reusable code in `packages/*`, expose human-facing flows from `apps/cl
 - `docs/testing-guide.md`
 - `docs/external-runner.md`
 - `docs/subscription-runner.md`
+- `docs/wiki-knowledge.md`
 - `docs/contribution-guide.md`
 - `docs/self-evolution-guide.md`
 - `docs/subbrain-design.md`
