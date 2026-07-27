@@ -1,6 +1,6 @@
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { EchoTool } from "@ai-lab/local-tools";
 import { FakeModelProvider, ModelRouter, externalRunnerFileSha256 } from "@ai-lab/model-providers";
@@ -99,16 +99,36 @@ describe("agent runtime", () => {
     );
     const query = await prepareWikiQuery(workspace, "durable knowledge");
     expect(query.contextFiles).toContain("pages/questions/what-is-durable-knowledge.md");
-    const knowledge = await new WikiKnowledgeWorkflow(workspace).prepareContext(
-      "durable knowledge",
-      now(),
-    );
+    const knowledgeWorkflow = new WikiKnowledgeWorkflow(workspace);
+    const knowledge = await knowledgeWorkflow.prepareContext("durable knowledge", now());
     expect(knowledge.knowledge.map(({ path }) => path)).toContain(
       "pages/questions/what-is-durable-knowledge.md",
     );
-    await expect(
-      new WikiKnowledgeWorkflow(workspace).validateContext(knowledge, now()),
-    ).resolves.toEqual(knowledge);
+    await expect(knowledgeWorkflow.validateContext(knowledge, now())).resolves.toEqual(knowledge);
+    await writeFile(
+      join(workspace.root, "wiki", "evals", "knowledge-retrieval.json"),
+      `${JSON.stringify({
+        schemaVersion: "ai-lab.wiki-knowledge-evaluation-cases.v1",
+        cases: [
+          {
+            id: "durable-knowledge",
+            query: "durable knowledge",
+            expectedPages: ["pages/questions/what-is-durable-knowledge.md"],
+            allowedPages: ["pages/questions/what-is-durable-knowledge.md"],
+            expectedSources: [relative(join(workspace.root, "wiki"), source.path)],
+          },
+          {
+            id: "unrelated-weather",
+            query: "weather forecast",
+            expectedPages: [],
+            allowedPages: [],
+            expectedSources: [],
+          },
+        ],
+      })}\n`,
+      "utf8",
+    );
+    await expect(knowledgeWorkflow.evaluate(now())).resolves.toMatchObject({ passed: true });
   });
 
   it("prepares and applies reviewed provider-neutral reflections without invoking a model", async () => {

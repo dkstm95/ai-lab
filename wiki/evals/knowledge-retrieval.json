@@ -1,0 +1,194 @@
+{
+  "schemaVersion": "ai-lab.wiki-knowledge-evaluation-cases.v1",
+  "cases": [
+    {
+      "id": "llm-wiki-rag-difference",
+      "query": "LLM Wiki는 RAG와 어떻게 다른가?",
+      "expectedPages": ["pages/concepts/llm-wiki-operating-model.md"],
+      "allowedPages": [
+        "pages/concepts/llm-wiki-operating-model.md",
+        "pages/sources/karpathy-llm-wiki.md"
+      ],
+      "expectedSources": [
+        "raw/sources/karpathy-llm-wiki-comments.md",
+        "raw/sources/karpathy-llm-wiki-original-verification.md",
+        "raw/sources/karpathy-llm-wiki.md"
+      ]
+    },
+    {
+      "id": "llm-wiki-concurrent-writers",
+      "query": "How should concurrent Wiki writers avoid collisions?",
+      "expectedPages": ["pages/concepts/llm-wiki-operating-model.md"],
+      "allowedPages": [
+        "pages/concepts/llm-wiki-operating-model.md",
+        "pages/sources/karpathy-llm-wiki.md"
+      ],
+      "expectedSources": [
+        "raw/sources/karpathy-llm-wiki-comments.md",
+        "raw/sources/karpathy-llm-wiki-original-verification.md",
+        "raw/sources/karpathy-llm-wiki.md"
+      ]
+    },
+    {
+      "id": "llm-wiki-search-infrastructure",
+      "query": "When should search infrastructure be added to an LLM Wiki?",
+      "expectedPages": ["pages/concepts/llm-wiki-operating-model.md"],
+      "allowedPages": [
+        "pages/concepts/llm-wiki-operating-model.md",
+        "pages/sources/karpathy-llm-wiki.md"
+      ],
+      "expectedSources": [
+        "raw/sources/karpathy-llm-wiki-comments.md",
+        "raw/sources/karpathy-llm-wiki-original-verification.md",
+        "raw/sources/karpathy-llm-wiki.md"
+      ]
+    },
+    {
+      "id": "llm-wiki-maintenance-operations",
+      "query": "What should ingest, query, and lint do in an LLM Wiki?",
+      "expectedPages": ["pages/concepts/llm-wiki-operating-model.md"],
+      "allowedPages": [
+        "pages/concepts/llm-wiki-operating-model.md",
+        "pages/sources/karpathy-llm-wiki.md"
+      ],
+      "expectedSources": [
+        "raw/sources/karpathy-llm-wiki-comments.md",
+        "raw/sources/karpathy-llm-wiki-original-verification.md",
+        "raw/sources/karpathy-llm-wiki.md"
+      ]
+    },
+    {
+      "id": "principal-ic-avoid-bottleneck",
+      "query": "principal IC가 조직의 병목이 되지 않으려면?",
+      "expectedPages": ["pages/concepts/principal-ic-operating-model.md"],
+      "allowedPages": [
+        "pages/concepts/principal-ic-operating-model.md",
+        "pages/sources/advice-for-new-principal-tech-ics.md"
+      ],
+      "expectedSources": [
+        "raw/sources/advice-for-new-principal-tech-ics-fuller-notes.md",
+        "raw/sources/advice-for-new-principal-tech-ics.md"
+      ]
+    },
+    {
+      "id": "principal-ic-decision-roles",
+      "query": "How should a principal choose owner sponsor or consultant roles?",
+      "expectedPages": ["pages/concepts/principal-ic-operating-model.md"],
+      "allowedPages": [
+        "pages/concepts/principal-ic-operating-model.md",
+        "pages/sources/advice-for-new-principal-tech-ics.md"
+      ],
+      "expectedSources": [
+        "raw/sources/advice-for-new-principal-tech-ics-fuller-notes.md",
+        "raw/sources/advice-for-new-principal-tech-ics.md"
+      ]
+    },
+    {
+      "id": "principal-ic-seniority-signals",
+      "query": "How can seniority amplify casual comments and silence?",
+      "expectedPages": ["pages/concepts/principal-ic-operating-model.md"],
+      "allowedPages": [
+        "pages/concepts/principal-ic-operating-model.md",
+        "pages/sources/advice-for-new-principal-tech-ics.md"
+      ],
+      "expectedSources": [
+        "raw/sources/advice-for-new-principal-tech-ics-fuller-notes.md",
+        "raw/sources/advice-for-new-principal-tech-ics.md"
+      ]
+    },
+    {
+      "id": "principal-ic-burnout",
+      "query": "How should principal ICs avoid burnout?",
+      "expectedPages": ["pages/concepts/principal-ic-operating-model.md"],
+      "allowedPages": [
+        "pages/concepts/principal-ic-operating-model.md",
+        "pages/sources/advice-for-new-principal-tech-ics.md"
+      ],
+      "expectedSources": [
+        "raw/sources/advice-for-new-principal-tech-ics-fuller-notes.md",
+        "raw/sources/advice-for-new-principal-tech-ics.md"
+      ]
+    },
+    {
+      "id": "ai-code-cognitive-debt",
+      "query": "What is cognitive debt in AI-generated code?",
+      "expectedPages": ["pages/sources/understanding-ai-generated-code.md"],
+      "allowedPages": ["pages/sources/understanding-ai-generated-code.md"],
+      "expectedSources": ["raw/sources/understanding-ai-generated-code.md"]
+    },
+    {
+      "id": "ai-code-active-questions",
+      "query": "How can quizzes test understanding of agent-written code?",
+      "expectedPages": ["pages/sources/understanding-ai-generated-code.md"],
+      "allowedPages": ["pages/sources/understanding-ai-generated-code.md"],
+      "expectedSources": ["raw/sources/understanding-ai-generated-code.md"]
+    },
+    {
+      "id": "ai-code-microworlds",
+      "query": "What are interactive microworlds useful for?",
+      "expectedPages": ["pages/sources/understanding-ai-generated-code.md"],
+      "allowedPages": ["pages/sources/understanding-ai-generated-code.md"],
+      "expectedSources": ["raw/sources/understanding-ai-generated-code.md"]
+    },
+    {
+      "id": "ai-data-moat",
+      "query": "AI 시대에 해자가 되는 것은 데이터일까?",
+      "expectedPages": ["pages/syntheses/ai-data-learning-advantage.md"],
+      "allowedPages": ["pages/syntheses/ai-data-learning-advantage.md"],
+      "expectedSources": [
+        "raw/sources/ai-wrapper-verticalization.md",
+        "raw/sources/data-is-your-only-moat.md",
+        "raw/sources/data-management-in-age-of-ai.md",
+        "raw/sources/data-perspective-action.md",
+        "raw/sources/task-economy-data.md"
+      ]
+    },
+    {
+      "id": "ai-data-outcome-evaluation",
+      "query": "AI 제품의 학습 루프에서 결과 평가는 왜 필요한가?",
+      "expectedPages": ["pages/syntheses/ai-data-learning-advantage.md"],
+      "allowedPages": ["pages/syntheses/ai-data-learning-advantage.md"],
+      "expectedSources": [
+        "raw/sources/ai-wrapper-verticalization.md",
+        "raw/sources/data-is-your-only-moat.md",
+        "raw/sources/data-management-in-age-of-ai.md",
+        "raw/sources/data-perspective-action.md",
+        "raw/sources/task-economy-data.md"
+      ]
+    },
+    {
+      "id": "ai-data-customer-specific-learning",
+      "query": "고객별 데이터가 공통 모델 개선으로 이어지는가?",
+      "expectedPages": ["pages/syntheses/ai-data-learning-advantage.md"],
+      "allowedPages": ["pages/syntheses/ai-data-learning-advantage.md"],
+      "expectedSources": [
+        "raw/sources/ai-wrapper-verticalization.md",
+        "raw/sources/data-is-your-only-moat.md",
+        "raw/sources/data-management-in-age-of-ai.md",
+        "raw/sources/data-perspective-action.md",
+        "raw/sources/task-economy-data.md"
+      ]
+    },
+    {
+      "id": "abstain-weather",
+      "query": "이번 주 서울 날씨는?",
+      "expectedPages": [],
+      "allowedPages": [],
+      "expectedSources": []
+    },
+    {
+      "id": "abstain-typescript-compiler",
+      "query": "TypeScript 컴파일러 오류 메시지는 어떻게 고치나?",
+      "expectedPages": [],
+      "allowedPages": [],
+      "expectedSources": []
+    },
+    {
+      "id": "abstain-react-state-library",
+      "query": "React 상태 관리 라이브러리는 무엇을 써야 하나?",
+      "expectedPages": [],
+      "allowedPages": [],
+      "expectedSources": []
+    }
+  ]
+}

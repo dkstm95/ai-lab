@@ -79,31 +79,58 @@ const ignoredTerms = new Set([
   "as",
   "at",
   "be",
+  "been",
+  "before",
   "by",
+  "can",
+  "could",
+  "did",
+  "do",
+  "does",
   "for",
   "from",
+  "had",
+  "has",
+  "have",
   "how",
   "in",
+  "into",
   "is",
   "it",
+  "may",
+  "might",
+  "must",
+  "not",
   "of",
   "on",
   "or",
+  "should",
   "the",
+  "than",
+  "that",
+  "these",
+  "this",
+  "those",
   "to",
+  "was",
+  "were",
   "what",
   "when",
   "where",
   "which",
   "who",
   "why",
+  "will",
   "with",
+  "would",
   "것",
+  "되지",
   "무엇",
   "어떻게",
   "언제",
   "어디",
   "누구",
+  "하나",
 ]);
 const genericKnowledgeTerms = new Set(["ai", "llm", "wiki"]);
 const koreanSuffixes = [
@@ -214,7 +241,7 @@ function scoredPage(
   requireSpecificMatch: boolean,
 ): WikiKnowledgeMatch | undefined {
   const matchedTerms = terms.filter((term) => termScore(page, term) > 0);
-  if (!usefulMatch(matchedTerms, requireSpecificMatch)) return undefined;
+  if (!usefulMatch(matchedTerms, terms.length, requireSpecificMatch)) return undefined;
   return {
     path: page.path,
     title: page.title,
@@ -228,8 +255,13 @@ function scoredPage(
   };
 }
 
-function usefulMatch(matchedTerms: readonly string[], requireSpecificMatch: boolean): boolean {
+function usefulMatch(
+  matchedTerms: readonly string[],
+  queryTermCount: number,
+  requireSpecificMatch: boolean,
+): boolean {
   if (matchedTerms.length === 0) return false;
+  if (queryTermCount > 1 && matchedTerms.length < 2) return false;
   const genericOnly = matchedTerms.every((term) => genericKnowledgeTerms.has(term));
   return !requireSpecificMatch || !genericOnly || matchedTerms.length >= 2;
 }
@@ -282,7 +314,6 @@ function textTerms(value: string): string[] {
 }
 
 function normalizeKoreanSuffix(term: string): string {
-  if (!/^[가-힣]+$/u.test(term)) return term;
   const suffix = koreanSuffixes.find(
     (candidate) => term.endsWith(candidate) && term.length - candidate.length >= 2,
   );

@@ -24,6 +24,7 @@ import {
   applyWikiProposal,
   applyWikiRebuild,
   applyWikiReflection,
+  evaluateCurrentWikiKnowledge,
   initWiki,
   lintWiki,
   parseWikiAnswerResult,
@@ -70,6 +71,11 @@ import {
   validateCurrentWikiReflectionTask,
 } from "../src/index.js";
 import {
+  evaluateWikiKnowledgePages,
+  parseWikiKnowledgeEvaluationCaseSet,
+  wikiKnowledgeEvaluationCaseSetSchemaVersion,
+} from "../src/knowledge-evaluation.js";
+import {
   buildWikiKnowledgeContext,
   selectWikiKnowledge,
   wikiKnowledgeReference,
@@ -108,6 +114,7 @@ describe("wiki", () => {
     await initWiki(workspace);
 
     await expect(stat(join(workspace.root, "wiki", "schema.md"))).resolves.toBeDefined();
+    await expect(stat(join(workspace.root, "wiki", "evals"))).resolves.toBeDefined();
     await expect(stat(join(workspace.root, "wiki", "raw", "sources"))).resolves.toBeDefined();
     await expect(stat(join(workspace.root, "wiki", "pages", "playbooks"))).resolves.toBeDefined();
     await expect(stat(join(workspace.root, "wiki", "pages", "questions"))).resolves.toBeDefined();
@@ -561,6 +568,104 @@ describe("wiki", () => {
         knowledge: [{ ...first, sha256: "0".repeat(64) }],
       }),
     ).toThrow("hash");
+  });
+
+  it("evaluates required pages, allowed noise, sources, and abstention", () => {
+    const page = knowledgeCandidate("pages/concepts/durable-knowledge.md");
+    const cases = knowledgeEvaluationCases();
+    const report = evaluateWikiKnowledgePages([page], cases, now());
+
+    expect(report).toMatchObject({
+      passed: true,
+      caseCount: 2,
+      passedCaseCount: 2,
+      metrics: {
+        casePassRate: 1,
+        requiredPageRecall: 1,
+        allowedPagePrecision: 1,
+        requiredSourceRecall: 1,
+        abstentionAccuracy: 1,
+      },
+    });
+
+    const noisy = evaluateWikiKnowledgePages(
+      [
+        page,
+        {
+          ...page,
+          path: "pages/concepts/durable-knowledge-noise.md",
+          title: "Durable Knowledge Noise",
+        },
+      ],
+      cases,
+      now(),
+    );
+    expect(noisy).toMatchObject({
+      passed: false,
+      passedCaseCount: 1,
+      metrics: { allowedPagePrecision: 0.5 },
+    });
+    expect(noisy.cases[0]?.unexpectedPages).toEqual(["pages/concepts/durable-knowledge-noise.md"]);
+  });
+
+  it("rejects malformed or unbalanced knowledge evaluation cases", () => {
+    const cases = knowledgeEvaluationCases();
+    expect(parseWikiKnowledgeEvaluationCaseSet(cases)).toEqual(cases);
+    expect(() => parseWikiKnowledgeEvaluationCaseSet({ ...cases, extra: true })).toThrow("unknown");
+    expect(() =>
+      parseWikiKnowledgeEvaluationCaseSet({
+        ...cases,
+        cases: [
+          cases.cases[0],
+          {
+            ...cases.cases[0],
+            id: "another-durable-knowledge",
+            query: "another durable knowledge",
+          },
+        ],
+      }),
+    ).toThrow("positive cases, and abstentions");
+    expect(() =>
+      parseWikiKnowledgeEvaluationCaseSet({
+        ...cases,
+        cases: [
+          {
+            ...cases.cases[0],
+            allowedPages: [],
+          },
+          cases.cases[1],
+        ],
+      }),
+    ).toThrow("invalid");
+  });
+
+  it("evaluates the current Wiki from its reviewed fixture", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    const path = await writeKnowledgePage(
+      workspace.root,
+      "concept",
+      "Durable Knowledge",
+      "active",
+      "## Summary\n\nDurable knowledge compounds across work.\n",
+    );
+    const cases = knowledgeEvaluationCases(path);
+    await writeFile(
+      join(workspace.root, "wiki", "evals", "knowledge-retrieval.json"),
+      `${JSON.stringify(cases)}\n`,
+    );
+
+    await expect(evaluateCurrentWikiKnowledge(workspace, now())).resolves.toMatchObject({
+      passed: true,
+      caseCount: 2,
+    });
+    await rm(rawSourcePath(workspace.root));
+    await expect(evaluateCurrentWikiKnowledge(workspace, now())).rejects.toThrow();
+    await writeFile(join(workspace.root, "wiki", "evals", "knowledge-retrieval.json"), "{bad json");
+    await expect(evaluateCurrentWikiKnowledge(workspace, now())).rejects.toThrow(
+      "fixture is invalid",
+    );
   });
 
   it("prepares evolve task packets for manual or automated improvement", async () => {
@@ -3205,6 +3310,40 @@ async function writeKnowledgePage(
     "utf8",
   );
   return path;
+}
+
+function knowledgeCandidate(path: string) {
+  return {
+    path,
+    title: "Durable Knowledge",
+    slug: path.slice(path.lastIndexOf("/") + 1, -3),
+    kind: "concept",
+    status: "active",
+    sources: ["raw/sources/karpathy-llm-wiki.md"],
+    content: "## Summary\n\nDurable knowledge compounds across work.\n",
+  };
+}
+
+function knowledgeEvaluationCases(expectedPath = "pages/concepts/durable-knowledge.md") {
+  return {
+    schemaVersion: wikiKnowledgeEvaluationCaseSetSchemaVersion,
+    cases: [
+      {
+        id: "durable-knowledge",
+        query: "durable knowledge",
+        expectedPages: [expectedPath],
+        allowedPages: [expectedPath],
+        expectedSources: ["raw/sources/karpathy-llm-wiki.md"],
+      },
+      {
+        id: "unrelated-weather",
+        query: "weather forecast",
+        expectedPages: [],
+        allowedPages: [],
+        expectedSources: [],
+      },
+    ],
+  };
 }
 
 function pagePath(root: string): string {

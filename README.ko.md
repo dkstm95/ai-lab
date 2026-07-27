@@ -56,6 +56,7 @@ LLM Wiki는 관리 영역에 복사한 source와 사람이 읽을 수 있는 재
 pnpm cli wiki init
 pnpm cli wiki source add notes.md --title "조사 노트"
 pnpm cli wiki knowledge retrieve "무엇이 지속 가능한 경쟁 우위를 만드는가?"
+pnpm cli wiki knowledge evaluate
 pnpm cli wiki answer task "무엇이 지속 가능한 경쟁 우위를 만드는가?" --out task.json
 
 # .ai-lab/wiki-exchange/task.json의 prompt를 원하는 AI에 전달한다.

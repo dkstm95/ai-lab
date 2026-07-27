@@ -173,6 +173,7 @@ async function dispatchWikiMaintenanceCommand(
     return reflectionReviewCommand(root, args[2] ?? "");
   if (route === "reflect apply" && args.length === 3)
     return reflectionApplyCommand(root, args[2] ?? "", options);
+  if (route === "knowledge evaluate" && args.length === 2) return knowledgeEvaluateCommand(root);
   if (route === "knowledge retrieve" && args.length === 3)
     return knowledgeRetrieveCommand(root, args[2] ?? "", options);
   return dispatchWikiMemoryCommand(root, args, options);
@@ -570,6 +571,30 @@ async function knowledgeRetrieveCommand(
   }
   const artifact = await writeArtifact(workspaceRoot(root), options.out, context);
   console.log(JSON.stringify(knowledgeContextSummary(context, artifact), null, 2));
+}
+
+async function knowledgeEvaluateCommand(root?: string): Promise<void> {
+  const report = await knowledgeWorkflow(root).evaluate();
+  console.log(JSON.stringify(knowledgeEvaluationSummary(report), null, 2));
+  if (!report.passed) {
+    throw new Error(
+      `Wiki knowledge evaluation failed: ${report.passedCaseCount}/${report.caseCount} cases passed`,
+    );
+  }
+}
+
+function knowledgeEvaluationSummary(
+  report: Awaited<ReturnType<WikiKnowledgeWorkflow["evaluate"]>>,
+) {
+  return {
+    schemaVersion: report.schemaVersion,
+    evaluatedAt: report.evaluatedAt,
+    passed: report.passed,
+    caseCount: report.caseCount,
+    passedCaseCount: report.passedCaseCount,
+    metrics: report.metrics,
+    failures: report.cases.filter(({ passed }) => !passed),
+  };
 }
 
 function knowledgeContextSummary(

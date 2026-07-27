@@ -27,6 +27,7 @@ const requiredRootScripts = [
   "smoke:dist",
   "test",
   "typecheck",
+  "wiki:knowledge:eval",
 ];
 
 const markdownLineLimit = 140;
@@ -64,6 +65,7 @@ for (const command of [
   "pnpm coverage",
   "pnpm build",
   "pnpm check",
+  "pnpm wiki:knowledge:eval",
 ]) {
   assert(
     docs.readme.includes(command) ||

@@ -30,7 +30,9 @@ CLI tests must not open a browser, call an API, or invoke a subscription tool.
 
 Knowledge tests verify active and review-date eligibility, deterministic field-weighted ranking,
 Korean suffix normalization, the five-page limit, raw-source expansion, answer-task binding, and
-stale page rejection. Compiled pages guide synthesis but cannot replace bound raw evidence.
+stale page rejection. The checked-in evaluation cases measure required-page recall, allowed-page
+precision, required-source recall, and correct abstention on unrelated questions. Compiled pages
+guide synthesis but cannot replace bound raw evidence.
 
 Memory tests verify active and review-date eligibility, reviewed multilingual retrieval terms,
 deterministic relevance ranking, the three-page limit, answer-task injection, stale hashes, exact
@@ -68,6 +70,7 @@ Coverage uses Vitest's V8 provider. `pnpm check` fails below 90% for branches, f
 pnpm code:shape
 pnpm docs:check
 pnpm smoke:dist
+pnpm wiki:knowledge:eval
 pnpm check
 ```
 
