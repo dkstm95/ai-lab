@@ -9,6 +9,7 @@ import type { AgentRunRequest, AgentRunResult, ToolResult } from "@ai-lab/protoc
 
 export { WikiAnswerWorkflow } from "./wiki-workflow.js";
 export { WikiMemoryWorkflow } from "./wiki-memory-workflow.js";
+export type { WikiMemoryComparisonRunInput } from "./wiki-memory-workflow.js";
 export { WikiRebuildWorkflow } from "./wiki-rebuild-workflow.js";
 export { WikiReflectionWorkflow } from "./wiki-reflection-workflow.js";
 export type {
@@ -37,6 +38,7 @@ export type {
   WikiReflectionResult,
   WikiReflectionApplyResult,
   WikiMemoryContext,
+  WikiMemoryComparisonJudgmentInput,
   WikiMemoryEvaluationInput,
   WikiMemoryEvaluationRecord,
   WikiMemoryEvaluationSummary,

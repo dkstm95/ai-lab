@@ -250,13 +250,70 @@ describe("cli", () => {
       ],
       root,
     );
+    await runCli(
+      [
+        "node",
+        "ai-lab",
+        "wiki",
+        "memory",
+        "control",
+        "--task",
+        "memory-task.json",
+        "--out",
+        "control-task.json",
+      ],
+      root,
+    );
+    const control = await artifact<WikiAnswerTask>(root, "control-task.json");
+    await Promise.all([
+      writeFile(
+        join(root, ".ai-lab", "wiki-exchange", "memory-result.json"),
+        `${JSON.stringify(answerResult(task, source.id, "The answer uses the review."))}\n`,
+        { mode: 0o600 },
+      ),
+      writeFile(
+        join(root, ".ai-lab", "wiki-exchange", "control-result.json"),
+        `${JSON.stringify(answerResult(control, source.id, "The answer omits the review."))}\n`,
+        { mode: 0o600 },
+      ),
+      writeFile(
+        join(root, ".ai-lab", "wiki-exchange", "comparison.json"),
+        `${JSON.stringify({
+          preference: "memory",
+          assessments: [{ path: selected.path, verdict: "helpful" }],
+        })}\n`,
+        { mode: 0o600 },
+      ),
+    ]);
+    await runCli(
+      [
+        "node",
+        "ai-lab",
+        "wiki",
+        "memory",
+        "compare",
+        "--task",
+        "memory-task.json",
+        "--control-task",
+        "control-task.json",
+        "--result",
+        "memory-result.json",
+        "--control-result",
+        "control-result.json",
+        "--input",
+        "comparison.json",
+      ],
+      root,
+    );
     await runCli(["node", "ai-lab", "wiki", "memory", "stats"], root);
 
     expect(loggedJson<{ evaluations: number; helpfulRate: number }>(log)).toMatchObject({
-      evaluations: 1,
+      evaluations: 2,
+      comparisons: 1,
       helpfulRate: 1,
+      counts: { memoryPreferred: 1 },
     });
-    await expect(readdir(join(root, "wiki", "raw", "evals"))).resolves.toHaveLength(1);
+    await expect(readdir(join(root, "wiki", "raw", "evals"))).resolves.toHaveLength(2);
   });
 
   it("prepares a private provider-neutral reflection artifact from explicit input", async () => {
@@ -1068,21 +1125,25 @@ async function writeResult(
 ): Promise<void> {
   await writeFile(
     join(root, ".ai-lab", "wiki-exchange", "result.json"),
-    `${JSON.stringify({
-      schemaVersion: "ai-lab.wiki-answer-result.v1",
-      taskId: task.id,
-      taskDigest: task.digest,
-      question: task.question,
-      summary,
-      acceptedClaims: [{ text: "Durable knowledge remains reusable.", sourceId }],
-    })}\n`,
+    `${JSON.stringify(answerResult(task, sourceId, summary))}\n`,
     { mode: 0o600 },
   );
 }
 
+function answerResult(task: WikiAnswerTask, sourceId: string, summary: string): WikiAnswerResult {
+  return {
+    schemaVersion: "ai-lab.wiki-answer-result.v1",
+    taskId: task.id,
+    taskDigest: task.digest,
+    question: task.question,
+    summary,
+    acceptedClaims: [{ text: "Durable knowledge remains reusable.", sourceId }],
+  };
+}
+
 function reflectionResult(task: WikiReflectionTask) {
   return {
-    schemaVersion: "ai-lab.wiki-reflection-result.v1",
+    schemaVersion: "ai-lab.wiki-reflection-result.v2",
     taskId: task.id,
     taskDigest: task.digest,
     outcome: "propose",
@@ -1092,6 +1153,7 @@ function reflectionResult(task: WikiReflectionTask) {
       title: "Scope Mismatch",
       slug: "scope-mismatch",
       summary: "Answer the requested scope.",
+      retrievalTerms: ["requested scope", "요청한 범위"],
       failure: "The response answered a different scope.",
       trigger: "A request can refer to more than one memory layer.",
       correction: ["Restate the requested scope."],
@@ -1111,6 +1173,8 @@ status: active
 createdAt: 2026-06-17T12:00:00.000Z
 updatedAt: 2026-06-17T12:00:00.000Z
 reviewAfter: 2027-06-17T12:00:00.000Z
+retrievalTerms:
+  - durable knowledge review
 sources:
 ---
 

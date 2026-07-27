@@ -130,6 +130,7 @@ and cannot be applied.
 ## Retrieval and Evaluation
 
 Answer tasks automatically inject at most three relevant active memory pages. Selection, stale
-hash checks, local usefulness observations, CLI commands, and interpretation limits are defined in
-[`wiki-memory.md`](wiki-memory.md). These observations guide later review; they do not prove that a
-memory caused an answer to improve.
+hash checks, reviewed multilingual retrieval terms, local usefulness observations, paired
+no-memory controls, CLI commands, and interpretation limits are defined in
+[`wiki-memory.md`](wiki-memory.md). One observation or comparison guides later review but does not
+prove that a memory caused an answer to improve.

@@ -22,8 +22,16 @@ reconstruct or authenticate that external approval history.
 ## Deterministic Selection
 
 The query is split into normalized letter and number terms. Common English function words are
-removed. Each matching term receives its strongest field weight:
+removed, and a narrow list of Korean particles is removed from Hangul terms. Domain-generic terms
+such as `LLM`, `Wiki`, `task`, `memory`, and `기억` do not count by themselves. A reflection result
+must provide specific `retrievalTerms`. Reviewed equivalents in another user language let a Korean
+request select an English page without an embedding service or model call.
 
+Every meaningful term in a multiword retrieval phrase must occur in the query before that phrase
+receives the retrieval-term weight. Each matching query term then receives its strongest field
+weight:
+
+- retrieval term: 10
 - title: 8
 - slug: 6
 - summary: 4
@@ -32,6 +40,9 @@ removed. Each matching term receives its strongest field weight:
 Results are ordered by relevance score. Ties prefer `playbook`, then `failure`, then `decision`, and
 finally the canonical page path. At most three pages are returned. A page with no matching term is
 unrelated and is not injected.
+
+Retrieval terms are page metadata. Reflection report approval binds them to the exact candidate,
+and changing them later changes the page hash and makes previously prepared tasks stale.
 
 `wiki memory retrieve` prints the selected page bytes, SHA-256 hashes, scores, and matched terms.
 Use `--out` when a private exchange artifact is needed:
@@ -59,13 +70,10 @@ once:
 ```json
 {
   "taskOutcome": "improved",
-  "assessments": [
-    {
-      "path": "pages/failures/memory-candidate-scope-mismatch.md",
-      "verdict": "helpful",
-      "note": "It prevented a scope substitution."
-    }
-  ],
+  "assessments": [{
+    "path": "pages/failures/memory-candidate-scope-mismatch.md",
+    "verdict": "helpful"
+  }],
   "note": "The answer stayed within the requested memory layer."
 }
 ```
@@ -84,9 +92,48 @@ Records are stored under ignored `wiki/raw/evals/`. They bind the answer task di
 path and hash, verdicts, and timestamp. They do not copy the answer, source contexts, or task prompt.
 Aggregate stats expose counts and helpful or harmful rates by page.
 
+## Paired Comparison
+
+An observation can be biased because the reviewer already knows which memory was used. For a
+stronger check, derive a control task from the exact selected-memory task:
+
+```bash
+pnpm cli wiki memory control --task answer-task.json --out control-task.json
+```
+
+The control keeps the same question, source evidence, and non-memory instructions. It removes only
+the selected memory references, memory page contexts, and memory precedence instruction. Its own
+digest binds that difference.
+
+Run both tasks through the same AI platform and model settings, preferably in separate sessions and
+in alternating order. Then save a human judgment:
+
+```json
+{
+  "preference": "memory",
+  "assessments": [{
+    "path": "pages/failures/memory-candidate-scope-mismatch.md",
+    "verdict": "helpful"
+  }],
+  "note": "The memory answer stayed within the requested scope."
+}
+```
+
+Allowed preferences are `memory`, `control`, and `tie`. Record the exact task and result pair:
+
+```bash
+pnpm cli wiki memory compare --task answer-task.json --control-task control-task.json \
+  --result memory-result.json --control-result control-result.json \
+  --input comparison.json
+```
+
+The record stores hashes of both results, the control task identity, the preference, and every
+per-page assessment. It does not copy answer text into the Wiki log.
+
 ## Interpretation
 
-The evaluation is an explicit human or trusted-caller observation, not a model self-score. It can
-show repeated usefulness, disuse, or harm, but it has no no-memory control group and therefore
-cannot prove causal improvement. Use enough observations to decide whether to revise, supersede, or
-retain a page. Add A/B evaluation only when the workflow has enough repeated tasks to support it.
+Evaluation is an explicit human or trusted-caller judgment, not a model self-score. A plain
+observation can show repeated usefulness, disuse, or harm but cannot establish that memory caused
+the difference. A paired comparison controls the task inputs more tightly, but one pair can still
+reflect model variance, run order, or reviewer bias. Repeat comparable pairs before revising,
+superseding, or retaining a page.

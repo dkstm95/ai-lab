@@ -28,9 +28,11 @@ creation and proposal preparation leave the live Wiki unchanged, stale or forged
 source IDs remain bound to selected evidence, and only an exact human-approved digest is promoted.
 CLI tests must not open a browser, call an API, or invoke a subscription tool.
 
-Memory tests verify active and review-date eligibility, deterministic relevance ranking, the
-three-page limit, answer-task injection, stale hashes, exact per-page assessments, and aggregate
-usefulness rates. Evaluation fixtures are local and must not claim causal improvement.
+Memory tests verify active and review-date eligibility, reviewed multilingual retrieval terms,
+deterministic relevance ranking, the three-page limit, answer-task injection, stale hashes, exact
+per-page assessments, digest-bound no-memory controls, paired result hashes and preferences, and
+aggregate usefulness rates. Evaluation fixtures are local and must not treat one comparison as
+causal proof.
 
 Shadow rebuild tests keep baseline pages hidden from task contexts, bind schema, index, source, and
 target hashes, accept independent evidence pages and structured synthesis targets, compare

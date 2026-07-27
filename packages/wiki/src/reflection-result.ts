@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const wikiReflectionResultSchemaVersion = "ai-lab.wiki-reflection-result.v1";
+export const wikiReflectionResultSchemaVersion = "ai-lab.wiki-reflection-result.v2";
 export const wikiReflectionReportSchemaVersion = "ai-lab.wiki-reflection-report.v1";
 
 const plainTextSchema = {
@@ -21,6 +21,15 @@ const optionalTextListSchema = {
   maxItems: 50,
   items: plainTextSchema,
 } as const;
+const retrievalTermsSchema = {
+  type: "array",
+  minItems: 1,
+  maxItems: 20,
+  uniqueItems: true,
+  items: { ...plainTextSchema, maxLength: 200 },
+  description:
+    "Specific search phrases, including likely terms in other user languages when useful.",
+} as const;
 const reflectionPageBaseProperties = {
   title: { ...plainTextSchema, maxLength: 500 },
   slug: {
@@ -30,6 +39,7 @@ const reflectionPageBaseProperties = {
     pattern: "^[a-z0-9가-힣]+(?:-[a-z0-9가-힣]+)*$",
   },
   summary: plainTextSchema,
+  retrievalTerms: retrievalTermsSchema,
   hypotheses: optionalTextListSchema,
   links: {
     type: "array",
@@ -47,6 +57,7 @@ const reflectionPageBaseRequired = [
   "title",
   "slug",
   "summary",
+  "retrievalTerms",
   "hypotheses",
   "links",
 ] as const;
@@ -121,6 +132,7 @@ interface WikiReflectionPageBase {
   readonly title: string;
   readonly slug: string;
   readonly summary: string;
+  readonly retrievalTerms: readonly string[];
   readonly hypotheses: readonly string[];
   readonly links: readonly string[];
 }
@@ -227,7 +239,7 @@ const reportKeys = [
   "introducedIssues",
   "resolvedIssues",
 ];
-const pageBaseKeys = ["kind", "title", "slug", "summary", "hypotheses", "links"];
+const pageBaseKeys = ["kind", "title", "slug", "summary", "retrievalTerms", "hypotheses", "links"];
 
 export function parseWikiReflectionResult(value: unknown): WikiReflectionResult {
   const record = strictRecord(value, resultKeys(value), "Wiki reflection result");
@@ -280,6 +292,7 @@ export function wikiReflectionResultTemplate(task: {
       title: "Concise Failure Title",
       slug: "concise-failure-title",
       summary: "One concise summary.",
+      retrievalTerms: ["specific task phrase", "다른 언어의 구체적 검색 구문"],
       failure: "The observable mistake.",
       trigger: "When this correction applies.",
       correction: ["First corrective action."],
@@ -338,11 +351,21 @@ function assertPageBase(page: WikiReflectionResultPage): void {
     !boundedPlainLine(page.title, 500) ||
     !slug(page.slug) ||
     !plainLine(page.summary) ||
+    !retrievalTerms(page.retrievalTerms) ||
     !plainList(page.hypotheses, false) ||
     !slugList(page.links)
   ) {
     throw new Error("Wiki reflection result page has invalid shared fields");
   }
+}
+
+function retrievalTerms(value: readonly string[]): boolean {
+  return (
+    plainList(value, true) &&
+    value.length <= 20 &&
+    value.every((term) => term.length <= 200) &&
+    new Set(value).size === value.length
+  );
 }
 
 function assertFailurePage(page: WikiReflectionFailurePage): void {

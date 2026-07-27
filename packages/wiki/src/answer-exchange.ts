@@ -142,6 +142,22 @@ export function parseWikiAnswerTask(value: unknown): WikiAnswerTask {
   return task;
 }
 
+export function buildWikiAnswerControlTask(taskValue: unknown): WikiAnswerTask {
+  const task = parseWikiAnswerTask(taskValue);
+  if (task.memories.length === 0) {
+    throw new Error("Wiki memory control requires a task with selected memories");
+  }
+  const memoryPaths = new Set(task.memories.map(({ path }) => path));
+  const input = {
+    question: task.question,
+    instructions: task.instructions.filter((value) => value !== wikiMemoryInstruction),
+    contexts: task.contexts.filter(({ path }) => !memoryPaths.has(path)),
+    evidence: task.evidence,
+    memories: [],
+  };
+  return buildWikiAnswerTask(task.title === undefined ? input : { ...input, title: task.title });
+}
+
 export function parseWikiAnswerResult(value: unknown): WikiAnswerResult {
   const record = strictRecord(value, resultKeys, "Wiki answer result");
   const result = structuredClone(record) as unknown as WikiAnswerResult;

@@ -191,7 +191,7 @@ describe("local tools", () => {
       input: {
         task: task.output,
         result: {
-          schemaVersion: "ai-lab.wiki-reflection-result.v1",
+          schemaVersion: "ai-lab.wiki-reflection-result.v2",
           taskId: reflectionTask.id,
           taskDigest: reflectionTask.digest,
           outcome: "propose",
@@ -201,6 +201,7 @@ describe("local tools", () => {
             title: "Scope Mismatch",
             slug: "scope-mismatch",
             summary: "Answer the requested scope.",
+            retrievalTerms: ["requested scope", "요청한 범위"],
             failure: "The response answered a different scope.",
             trigger: "A request can refer to more than one memory layer.",
             correction: ["Restate the requested scope."],

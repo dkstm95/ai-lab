@@ -4,20 +4,28 @@ import { extname, isAbsolute, join, posix, relative } from "node:path";
 import { type Workspace, slugify } from "@ai-lab/workspace";
 import {
   type WikiAnswerProposalDraft,
+  type WikiAnswerResult,
   type WikiAnswerTask,
   type WikiAnswerTaskEvidence,
   answerDraftFromExchange,
+  buildWikiAnswerControlTask,
   buildWikiAnswerTask,
   parseWikiAnswerResult,
+  parseWikiAnswerResultForTask,
   parseWikiAnswerTask,
 } from "./answer-exchange.js";
 import {
+  type WikiMemoryComparisonEvidence,
+  type WikiMemoryComparisonJudgmentInput,
   type WikiMemoryContext,
   type WikiMemoryEvaluationRecord,
   type WikiMemoryEvaluationSummary,
   type WikiMemoryMatch,
+  type WikiMemoryPageCandidate,
   buildWikiMemoryContext,
   buildWikiMemoryEvaluationRecord,
+  comparisonOutcome,
+  parseWikiMemoryComparisonJudgmentInput,
   parseWikiMemoryContext,
   parseWikiMemoryEvaluationInput,
   parseWikiMemoryEvaluationRecord,
@@ -87,6 +95,7 @@ import {
 } from "./transaction.js";
 
 export {
+  buildWikiAnswerControlTask,
   parseWikiAnswerResult,
   parseWikiAnswerTask,
   wikiAnswerResultJsonSchema,
@@ -103,6 +112,7 @@ export type {
 } from "./answer-exchange.js";
 export {
   parseWikiMemoryContext,
+  parseWikiMemoryComparisonJudgmentInput,
   parseWikiMemoryEvaluationInput,
   parseWikiMemoryEvaluationRecord,
   wikiMemoryContextSchemaVersion,
@@ -112,10 +122,14 @@ export {
 } from "./memory.js";
 export type {
   WikiMemoryAssessmentInput,
+  WikiMemoryComparisonEvidence,
+  WikiMemoryComparisonJudgmentInput,
+  WikiMemoryComparisonPreference,
   WikiMemoryContext,
   WikiMemoryEvaluationAssessment,
   WikiMemoryEvaluationCounts,
   WikiMemoryEvaluationInput,
+  WikiMemoryEvaluationMode,
   WikiMemoryEvaluationRecord,
   WikiMemoryEvaluationSummary,
   WikiMemoryKind,
@@ -229,6 +243,7 @@ export interface WikiPageMetadata {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly reviewAfter?: string;
+  readonly retrievalTerms?: readonly string[];
   readonly sources: readonly string[];
 }
 
@@ -280,6 +295,14 @@ export interface WikiReflectionApplyResult {
   readonly reportId: string;
   readonly files: readonly string[];
   readonly lint: WikiLintReport;
+}
+
+export interface RecordWikiMemoryComparisonInput {
+  readonly task: unknown;
+  readonly controlTask: unknown;
+  readonly memoryResult: unknown;
+  readonly controlResult: unknown;
+  readonly judgment: unknown;
 }
 
 export interface RecordWikiRunInput {
@@ -795,6 +818,110 @@ export async function recordWikiMemoryEvaluation(
     recordedAt: new Date(now.getTime()).toISOString(),
   });
   return withWikiWriteLock(workspace, (locked) => recordWikiMemoryEvaluationLocked(locked, record));
+}
+
+export async function prepareWikiMemoryControlTask(
+  workspace: Workspace,
+  taskValue: unknown,
+): Promise<WikiAnswerTask> {
+  const task = parseWikiAnswerTask(taskValue);
+  return withWikiWriteLock(workspace, async (locked) => {
+    await assertAnswerTaskCurrent(locked, task);
+    return buildWikiAnswerControlTask(task);
+  });
+}
+
+export async function recordWikiMemoryComparison(
+  workspace: Workspace,
+  input: RecordWikiMemoryComparisonInput,
+  now: Date = new Date(),
+): Promise<WikiMemoryEvaluationRecord> {
+  const snapshot = memoryComparisonSnapshot(input, now);
+  return withWikiWriteLock(workspace, async (locked) => {
+    await assertAnswerTaskCurrent(locked, snapshot.task);
+    assertExpectedMemoryControl(snapshot.task, snapshot.controlTask);
+    const record = buildMemoryComparisonRecord(snapshot);
+    return recordWikiMemoryEvaluationLocked(locked, record);
+  });
+}
+
+function memoryComparisonSnapshot(input: RecordWikiMemoryComparisonInput, now: Date) {
+  const task = parseWikiAnswerTask(input.task);
+  const controlTask = parseWikiAnswerTask(input.controlTask);
+  return {
+    task,
+    controlTask,
+    memoryResult: parseWikiAnswerResultForTask(task, input.memoryResult),
+    controlResult: parseWikiAnswerResultForTask(controlTask, input.controlResult),
+    judgment: parseWikiMemoryComparisonJudgmentInput(input.judgment),
+    recordedAt: new Date(now.getTime()).toISOString(),
+  };
+}
+
+function buildMemoryComparisonRecord(
+  snapshot: ReturnType<typeof memoryComparisonSnapshot>,
+): WikiMemoryEvaluationRecord {
+  return buildWikiMemoryEvaluationRecord({
+    taskId: snapshot.task.id,
+    taskDigest: snapshot.task.digest,
+    query: snapshot.task.question,
+    memories: snapshot.task.memories,
+    evaluation: comparisonEvaluation(snapshot.judgment),
+    comparison: comparisonEvidence(
+      snapshot.controlTask,
+      snapshot.memoryResult,
+      snapshot.controlResult,
+      snapshot.judgment,
+    ),
+    recordedAt: snapshot.recordedAt,
+  });
+}
+
+function assertExpectedMemoryControl(task: WikiAnswerTask, controlTask: WikiAnswerTask): void {
+  const expected = buildWikiAnswerControlTask(task);
+  if (controlTask.id !== expected.id || controlTask.digest !== expected.digest) {
+    throw new Error("Wiki memory control task does not match the selected-memory task");
+  }
+}
+
+function comparisonEvaluation(
+  judgment: WikiMemoryComparisonJudgmentInput,
+): ReturnType<typeof parseWikiMemoryEvaluationInput> {
+  const input = {
+    taskOutcome: comparisonOutcome(judgment.preference),
+    assessments: judgment.assessments,
+  };
+  return parseWikiMemoryEvaluationInput(
+    judgment.note === undefined ? input : { ...input, note: judgment.note },
+  );
+}
+
+function comparisonEvidence(
+  controlTask: WikiAnswerTask,
+  memoryResult: WikiAnswerResult,
+  controlResult: WikiAnswerResult,
+  judgment: WikiMemoryComparisonJudgmentInput,
+): WikiMemoryComparisonEvidence {
+  return {
+    controlTaskId: controlTask.id,
+    controlTaskDigest: controlTask.digest,
+    memoryResultSha256: answerResultSha256(memoryResult),
+    controlResultSha256: answerResultSha256(controlResult),
+    preference: judgment.preference,
+  };
+}
+
+function answerResultSha256(result: WikiAnswerResult): string {
+  return sha256(
+    JSON.stringify({
+      schemaVersion: result.schemaVersion,
+      taskId: result.taskId,
+      taskDigest: result.taskDigest,
+      question: result.question,
+      summary: result.summary,
+      acceptedClaims: result.acceptedClaims.map(({ text, sourceId }) => ({ text, sourceId })),
+    }),
+  );
 }
 
 export async function summarizeWikiMemoryEvaluations(
@@ -1691,22 +1818,28 @@ async function wikiMemoryMatches(
 ): Promise<WikiMemoryMatch[]> {
   const pages = await listWikiPages(workspace);
   return selectWikiMemories(
-    pages.map((page) => {
-      const candidate = {
-        path: relativeWikiPath(workspace, page.path),
-        title: page.metadata.title,
-        slug: page.metadata.slug,
-        kind: page.metadata.kind,
-        status: page.metadata.status,
-        content: page.content,
-      };
-      return page.metadata.reviewAfter === undefined
-        ? candidate
-        : { ...candidate, reviewAfter: page.metadata.reviewAfter };
-    }),
+    pages.map((page) => memoryPageCandidate(workspace, page)),
     query,
     now,
   );
+}
+
+function memoryPageCandidate(workspace: Workspace, page: WikiPage): WikiMemoryPageCandidate {
+  const candidate = {
+    path: relativeWikiPath(workspace, page.path),
+    title: page.metadata.title,
+    slug: page.metadata.slug,
+    kind: page.metadata.kind,
+    status: page.metadata.status,
+    content: page.content,
+  };
+  const withTerms =
+    page.metadata.retrievalTerms === undefined
+      ? candidate
+      : { ...candidate, retrievalTerms: page.metadata.retrievalTerms };
+  return page.metadata.reviewAfter === undefined
+    ? withTerms
+    : { ...withTerms, reviewAfter: page.metadata.reviewAfter };
 }
 
 async function selectQueryPages(workspace: Workspace, question: string): Promise<WikiPage[]> {
@@ -1868,6 +2001,7 @@ function reflectionMetadata(
     createdAt: existing?.metadata.createdAt ?? timestamp,
     updatedAt: timestamp,
     reviewAfter: new Date(generatedAt.getTime() + 180 * 86_400_000).toISOString(),
+    retrievalTerms: unique(page.retrievalTerms).sort((left, right) => left.localeCompare(right)),
     sources: [],
   };
 }
@@ -2767,6 +2901,7 @@ async function pageIssues(
     ...staleTodoIssues(page),
     ...conflictedPageIssues(page),
     ...reviewPageIssues(page),
+    ...retrievalTermIssues(page),
     ...invalidReviewAfterIssues(page),
     ...staleReviewIssues(page, now),
     ...(await sourceReferenceIssues(workspace, page)),
@@ -2817,6 +2952,20 @@ function conflictedPageIssues(page: WikiPage): WikiLintIssue[] {
 function reviewPageIssues(page: WikiPage): WikiLintIssue[] {
   return page.metadata.status === "review"
     ? [issue("review-page", page.path, "Wiki page is waiting for human review")]
+    : [];
+}
+
+function retrievalTermIssues(page: WikiPage): WikiLintIssue[] {
+  return page.metadata.status === "active" &&
+    ["playbook", "failure", "decision"].includes(page.metadata.kind) &&
+    page.metadata.retrievalTerms === undefined
+    ? [
+        issue(
+          "missing-retrieval-terms",
+          page.path,
+          "Active reflection page requires reviewed retrievalTerms",
+        ),
+      ]
     : [];
 }
 
@@ -2996,9 +3145,12 @@ function frontmatter(content: string): string {
 }
 
 function parseMetadata(markdown: string): WikiPageMetadata {
+  return metadataWithOptionalFields(basePageMetadata(markdown), markdown);
+}
+
+function basePageMetadata(markdown: string): WikiPageMetadata {
   const map = frontmatterMap(markdown);
-  const reviewAfter = optional(map, "reviewAfter");
-  const metadata = {
+  return {
     title: required(map, "title"),
     slug: required(map, "slug"),
     kind: parseKind(required(map, "kind")),
@@ -3007,7 +3159,27 @@ function parseMetadata(markdown: string): WikiPageMetadata {
     updatedAt: required(map, "updatedAt"),
     sources: parseSources(markdown),
   };
-  return reviewAfter === undefined ? metadata : { ...metadata, reviewAfter };
+}
+
+function metadataWithOptionalFields(
+  metadata: WikiPageMetadata,
+  markdown: string,
+): WikiPageMetadata {
+  const reviewAfter = optional(frontmatterMap(markdown), "reviewAfter");
+  const retrievalTerms = validatedRetrievalTerms(parseFrontmatterList(markdown, "retrievalTerms"));
+  const withReview = reviewAfter === undefined ? metadata : { ...metadata, reviewAfter };
+  return retrievalTerms.length === 0 ? withReview : { ...withReview, retrievalTerms };
+}
+
+function validatedRetrievalTerms(terms: string[]): string[] {
+  if (
+    terms.length > 20 ||
+    new Set(terms).size !== terms.length ||
+    terms.some((term) => !boundedOneLine(term, 200))
+  ) {
+    throw new Error("Invalid retrievalTerms frontmatter");
+  }
+  return terms;
 }
 
 function frontmatterMap(markdown: string): Map<string, string> {
@@ -3021,7 +3193,11 @@ function frontmatterMap(markdown: string): Map<string, string> {
 }
 
 function parseSources(markdown: string): string[] {
-  const match = markdown.match(/^sources:\n((?:\s+- .+\n?)*)/m);
+  return parseFrontmatterList(markdown, "sources");
+}
+
+function parseFrontmatterList(markdown: string, field: string): string[] {
+  const match = markdown.match(new RegExp(`^${field}:\\n((?:\\s+- .+\\n?)*)`, "m"));
   return match?.[1]?.split("\n").flatMap(sourceLine) ?? [];
 }
 
@@ -3033,7 +3209,11 @@ function sourceLine(line: string): string[] {
 function renderFrontmatter(metadata: WikiPageMetadata): string {
   const reviewAfter =
     metadata.reviewAfter === undefined ? "" : `reviewAfter: ${metadata.reviewAfter}\n`;
-  return `title: ${metadata.title}\nslug: ${metadata.slug}\nkind: ${metadata.kind}\nstatus: ${metadata.status}\ncreatedAt: ${metadata.createdAt}\nupdatedAt: ${metadata.updatedAt}\n${reviewAfter}sources:\n${metadata.sources.map((source) => `  - ${source}`).join("\n")}\n`;
+  const retrievalTerms =
+    metadata.retrievalTerms === undefined
+      ? ""
+      : `retrievalTerms:\n${metadata.retrievalTerms.map((term) => `  - ${term}`).join("\n")}\n`;
+  return `title: ${metadata.title}\nslug: ${metadata.slug}\nkind: ${metadata.kind}\nstatus: ${metadata.status}\ncreatedAt: ${metadata.createdAt}\nupdatedAt: ${metadata.updatedAt}\n${reviewAfter}${retrievalTerms}sources:\n${metadata.sources.map((source) => `  - ${source}`).join("\n")}\n`;
 }
 
 function parseKind(value: string): WikiPageKind {
@@ -3097,6 +3277,7 @@ function schemaPageRules(): string {
   return [
     "## Page Rules",
     "- Use YAML frontmatter with title, slug, kind, status, createdAt, updatedAt, and sources.",
+    "- Active reflection pages also keep reviewed `retrievalTerms`. Use specific future task phrases and useful equivalents in other user languages; do not use generic kind names by themselves.",
     "- Use typed claims: accepted, hypothesis, or conflicted.",
     "- Keep source-backed facts in accepted claims and interpretations that still require project judgment in hypothesis claims.",
     "- Every accepted claim must include a following source line.",
@@ -3120,9 +3301,9 @@ function schemaWorkflowRules(): string {
     "## Reflect",
     "Prepare a task from one explicit run or summary, feedback, validation, and changed files. Return a typed failure, playbook, decision, or skip result. The package renders and lints candidate Markdown. Promote it only after review of the exact report digest.",
     "## Memory",
-    "Retrieve at most three relevant active playbook, failure, or decision pages whose review date has not expired. Treat them as guidance, not factual evidence. The current request, explicit instructions, and source evidence take precedence. Bind selected paths, content hashes, scores, and matched terms to answer tasks. Store explicit post-task usefulness observations under `raw/evals/`; they do not prove causal improvement.",
+    "Retrieve at most three relevant active playbook, failure, or decision pages whose review date has not expired. Score reviewed retrieval terms before title, slug, summary, and body terms. Treat memories as guidance, not factual evidence. The current request, explicit instructions, and source evidence take precedence. Bind selected paths, content hashes, scores, and matched terms to answer tasks. Store explicit post-task usefulness observations under `raw/evals/`. For stronger evidence, derive a digest-bound control task that differs only by removing memory, then bind both answer-result hashes and the human preference to a paired comparison record.",
     "## Lint",
-    "Check broken links, orphan concept/entity/synthesis pages, stale TODOs, unsupported sources, conflicted or review pages, duplicate slugs, duplicate accepted claims, stale active pages, and index drift.",
+    "Check broken links, orphan concept/entity/synthesis pages, stale TODOs, unsupported sources, conflicted or review pages, active reflection pages without retrieval terms, duplicate slugs, duplicate accepted claims, stale active pages, and index drift.",
   ].join("\n\n");
 }
 

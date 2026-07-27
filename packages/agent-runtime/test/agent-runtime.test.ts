@@ -169,6 +169,25 @@ describe("agent runtime", () => {
       helpfulRate: 1,
       counts: { improved: 1, helpful: 1 },
     });
+    const control = await memory.prepareControlTask(task);
+    await memory.recordComparison(
+      {
+        task,
+        controlTask: control,
+        memoryResult: answerResult(task, source.id),
+        controlResult: answerResult(control, source.id),
+        judgment: {
+          preference: "tie",
+          assessments: [{ path: selected.path, verdict: "unused" }],
+        },
+      },
+      new Date("2026-06-17T13:00:00.000Z"),
+    );
+    await expect(memory.summarizeEvaluations()).resolves.toMatchObject({
+      evaluations: 2,
+      comparisons: 1,
+      counts: { tied: 1 },
+    });
   });
 
   it("returns a task-bound result without changing the live Wiki", async () => {
@@ -278,6 +297,7 @@ async function writeMemoryPage(root: string): Promise<void> {
         createdAt: "2026-06-17T12:00:00.000Z",
         updatedAt: "2026-06-17T12:00:00.000Z",
         reviewAfter: "2027-06-17T12:00:00.000Z",
+        retrievalTerms: ["durable knowledge review"],
         sources: [],
       },
       "## Summary\n\nReview durable knowledge before reuse.\n\n## Links\n\n",
@@ -309,7 +329,7 @@ async function currentWikiFiles(root: string, evidencePath: string): Promise<str
 
 function reflectionResult(task: { id: string; digest: string }) {
   return {
-    schemaVersion: "ai-lab.wiki-reflection-result.v1",
+    schemaVersion: "ai-lab.wiki-reflection-result.v2",
     taskId: task.id,
     taskDigest: task.digest,
     outcome: "propose",
@@ -319,6 +339,7 @@ function reflectionResult(task: { id: string; digest: string }) {
       title: "Scope Mismatch",
       slug: "scope-mismatch",
       summary: "Answer the requested scope.",
+      retrievalTerms: ["requested scope", "요청한 범위"],
       failure: "The response answered a different scope.",
       trigger: "A request can refer to more than one memory layer.",
       correction: ["Restate the requested scope."],

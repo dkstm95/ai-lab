@@ -13,6 +13,7 @@ The LLM agent prepares source-backed knowledge and evidence-bound reflections. A
 
 ## Page Rules
 - Use YAML frontmatter with title, slug, kind, status, createdAt, updatedAt, and sources.
+- Active reflection pages also keep reviewed `retrievalTerms`. Use specific future task phrases and useful equivalents in other user languages; do not use generic kind names by themselves.
 - Use typed claims: accepted, hypothesis, or conflicted.
 - Keep source-backed facts in accepted claims and interpretations that still require project judgment in hypothesis claims.
 - Every accepted claim must include a following source line.
@@ -46,8 +47,8 @@ Prepare a task from one explicit run or summary, feedback, validation, and chang
 
 ## Memory
 
-Retrieve at most three relevant active playbook, failure, or decision pages whose review date has not expired. Treat them as guidance, not factual evidence. The current request, explicit instructions, and source evidence take precedence. Bind selected paths, content hashes, scores, and matched terms to answer tasks. Store explicit post-task usefulness observations under `raw/evals/`; they do not prove causal improvement.
+Retrieve at most three relevant active playbook, failure, or decision pages whose review date has not expired. Score reviewed retrieval terms before title, slug, summary, and body terms. Treat memories as guidance, not factual evidence. The current request, explicit instructions, and source evidence take precedence. Bind selected paths, content hashes, scores, and matched terms to answer tasks. Store explicit post-task usefulness observations under `raw/evals/`. For stronger evidence, derive a digest-bound control task that differs only by removing memory, then bind both answer-result hashes and the human preference to a paired comparison record.
 
 ## Lint
 
-Check broken links, orphan concept/entity/synthesis pages, stale TODOs, unsupported sources, conflicted or review pages, duplicate slugs, duplicate accepted claims, stale active pages, and index drift.
+Check broken links, orphan concept/entity/synthesis pages, stale TODOs, unsupported sources, conflicted or review pages, active reflection pages without retrieval terms, duplicate slugs, duplicate accepted claims, stale active pages, and index drift.

@@ -4,8 +4,15 @@ slug: memory-candidate-scope-mismatch
 kind: failure
 status: active
 createdAt: 2026-07-15T03:54:12.000Z
-updatedAt: 2026-07-15T03:54:12.000Z
+updatedAt: 2026-07-27T09:56:00.000Z
 reviewAfter: 2027-01-15T00:00:00.000Z
+retrievalTerms:
+  - conversation memory scope
+  - personal context storage
+  - requested memory scope
+  - 개인 맥락 저장
+  - 기억 범위
+  - 대화 기억
 sources:
 ---
 

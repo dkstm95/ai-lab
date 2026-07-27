@@ -8,6 +8,7 @@ import {
   type WikiAnswerRunnerResult,
   type WikiAnswerTask,
   WikiAnswerWorkflow,
+  type WikiMemoryComparisonRunInput,
   WikiMemoryWorkflow,
   type WikiProposal,
   type WikiRebuildReport,
@@ -17,7 +18,7 @@ import {
   externalRunnerFileSha256,
 } from "@ai-lab/agent-runtime";
 import { createDefaultWorkspace, createWorkspace } from "@ai-lab/workspace";
-import type { CAC } from "cac";
+import type { CAC, Command } from "cac";
 
 interface SourceOptions {
   readonly title?: string;
@@ -55,12 +56,18 @@ interface RunnerOptions {
   readonly trustRunner?: string;
 }
 
+interface ComparisonOptions {
+  readonly controlResult?: string;
+  readonly controlTask?: string;
+}
+
 interface WikiCommandOptions
   extends SourceOptions,
     TaskOptions,
     ProposeOptions,
     ApplyOptions,
-    RunnerOptions {}
+    RunnerOptions,
+    ComparisonOptions {}
 
 interface ArtifactReservation {
   readonly handle: FileHandle;
@@ -76,8 +83,19 @@ const runnerTerminationSignals: readonly NodeJS.Signals[] =
   process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
 
 export function registerWikiCommands(cli: CAC, root?: string): void {
-  cli
-    .command("wiki [...args]", "Manage the local provider-neutral LLM Wiki")
+  comparisonCommandOptions(
+    runnerCommandOptions(
+      artifactCommandOptions(
+        cli.command("wiki [...args]", "Manage the local provider-neutral LLM Wiki"),
+      ),
+    ),
+  ).action((args: string[], options: WikiCommandOptions) =>
+    dispatchWikiCommand(root, args, options),
+  );
+}
+
+function artifactCommandOptions(command: Command): Command {
+  return command
     .option("--title <title>", "Human-readable source or page title")
     .option("--sources <ids>", "Comma-separated registered source ids")
     .option("--input <file>", "Private input artifact filename")
@@ -85,7 +103,11 @@ export function registerWikiCommands(cli: CAC, root?: string): void {
     .option("--task <file>", "Task artifact filename")
     .option("--result <file>", "AI result artifact filename")
     .option("--reviewer <name>", "Human reviewer identity")
-    .option("--accept-digest <digest>", "Full reviewed proposal or report digest")
+    .option("--accept-digest <digest>", "Full reviewed proposal or report digest");
+}
+
+function runnerCommandOptions(command: Command): Command {
+  return command
     .option("--runner-id <id>", "Explicit external runner id")
     .option("--runner-executable <path>", "Absolute external runner executable")
     .option("--runner-args-json <json>", "Static argument JSON array, default []")
@@ -94,10 +116,13 @@ export function registerWikiCommands(cli: CAC, root?: string): void {
     .option("--runner-timeout-ms <ms>", "External runner timeout in milliseconds")
     .option("--accept-task-digest <digest>", "Full disclosed task digest")
     .option("--accept-runner-digest <digest>", "Full disclosed runner config digest")
-    .option("--trust-runner <id>", "Exact disclosed runner id")
-    .action((args: string[], options: WikiCommandOptions) =>
-      dispatchWikiCommand(root, args, options),
-    );
+    .option("--trust-runner <id>", "Exact disclosed runner id");
+}
+
+function comparisonCommandOptions(command: Command): Command {
+  return command
+    .option("--control-task <file>", "No-memory control task artifact filename")
+    .option("--control-result <file>", "No-memory control result artifact filename");
 }
 
 async function dispatchWikiCommand(
@@ -153,6 +178,8 @@ async function dispatchWikiMemoryCommand(
   const route = args.slice(0, 2).join(" ");
   if (route === "memory retrieve" && args.length === 3)
     return memoryRetrieveCommand(root, args[2] ?? "", options);
+  if (route === "memory control" && args.length === 2) return memoryControlCommand(root, options);
+  if (route === "memory compare" && args.length === 2) return memoryCompareCommand(root, options);
   if (route === "memory evaluate" && args.length === 2) return memoryEvaluateCommand(root, options);
   if (route === "memory stats" && args.length === 2) return memoryStatsCommand(root);
   throw new Error(`Unknown wiki command: wiki ${args.join(" ")}`);
@@ -550,6 +577,53 @@ async function memoryEvaluateCommand(
   ]);
   const record = await memoryWorkflow(root).recordEvaluation(task, input);
   console.log(JSON.stringify({ id: record.id, digest: record.digest }, null, 2));
+}
+
+async function memoryControlCommand(
+  root: string | undefined,
+  options: WikiCommandOptions,
+): Promise<void> {
+  const task = await readArtifact(workspaceRoot(root), requiredText(options.task, "--task"));
+  const control = await memoryWorkflow(root).prepareControlTask(task);
+  const artifact = await writeArtifact(
+    workspaceRoot(root),
+    requiredText(options.out, "--out"),
+    control,
+  );
+  console.log(JSON.stringify({ artifact, id: control.id, digest: control.digest }, null, 2));
+}
+
+async function memoryCompareCommand(
+  root: string | undefined,
+  options: WikiCommandOptions,
+): Promise<void> {
+  const input = await readMemoryComparisonInput(workspaceRoot(root), options);
+  const record = await memoryWorkflow(root).recordComparison(input);
+  console.log(JSON.stringify(memoryComparisonSummary(record), null, 2));
+}
+
+async function readMemoryComparisonInput(
+  rootPath: string,
+  options: WikiCommandOptions,
+): Promise<WikiMemoryComparisonRunInput> {
+  const [task, controlTask, memoryResult, controlResult, judgment] = await Promise.all([
+    readArtifact(rootPath, requiredText(options.task, "--task")),
+    readArtifact(rootPath, requiredText(options.controlTask, "--control-task")),
+    readArtifact(rootPath, requiredText(options.result, "--result")),
+    readArtifact(rootPath, requiredText(options.controlResult, "--control-result")),
+    readArtifact(rootPath, requiredText(options.input, "--input")),
+  ]);
+  return { task, controlTask, memoryResult, controlResult, judgment };
+}
+
+function memoryComparisonSummary(
+  record: Awaited<ReturnType<WikiMemoryWorkflow["recordComparison"]>>,
+) {
+  return {
+    id: record.id,
+    digest: record.digest,
+    preference: record.comparison?.preference,
+  };
 }
 
 async function memoryStatsCommand(root?: string): Promise<void> {

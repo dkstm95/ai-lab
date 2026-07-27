@@ -29,6 +29,7 @@ import {
   parseWikiAnswerResult,
   parseWikiAnswerResultForTask,
   parseWikiAnswerTask,
+  parseWikiMemoryComparisonJudgmentInput,
   parseWikiMemoryContext,
   parseWikiMemoryEvaluationInput,
   parseWikiMemoryEvaluationRecord,
@@ -48,12 +49,14 @@ import {
   prepareWikiEvolve,
   prepareWikiIngest,
   prepareWikiMemoryContext,
+  prepareWikiMemoryControlTask,
   prepareWikiQuery,
   prepareWikiRebuildReport,
   prepareWikiRebuildTask,
   prepareWikiReflectionReport,
   prepareWikiReflectionTask,
   readWikiPage,
+  recordWikiMemoryComparison,
   recordWikiMemoryEvaluation,
   recordWikiRun,
   renderWikiPage,
@@ -268,6 +271,38 @@ describe("wiki", () => {
 
     expect(page.metadata).toEqual(metadata());
     expect(rendered).toContain("kind: concept");
+    expect(() =>
+      parseWikiPage(
+        renderWikiPage(
+          { ...metadata(), retrievalTerms: ["same term", "same term"] },
+          "## Summary\n\nA page.",
+        ),
+      ),
+    ).toThrow("retrievalTerms");
+  });
+
+  it("reports active reflection pages without reviewed retrieval terms", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeFile(
+      join(workspace.root, "wiki", "pages", "failures", "missing-terms.md"),
+      renderWikiPage(
+        {
+          title: "Missing Terms",
+          slug: "missing-terms",
+          kind: "failure",
+          status: "active",
+          createdAt: "2026-06-17T12:00:00.000Z",
+          updatedAt: "2026-06-17T12:00:00.000Z",
+          sources: [],
+        },
+        "## Summary\n\nA reusable correction.\n\n## Links\n\n",
+      ),
+    );
+
+    const report = await lintWiki(workspace);
+
+    expect(report.issues.map(({ code }) => code)).toContain("missing-retrieval-terms");
   });
 
   it("reports lint findings for invalid wiki content", async () => {
@@ -475,7 +510,7 @@ describe("wiki", () => {
     ]);
     expect(task.prompt).toContain("untrusted evidence");
     expect(task.prompt).toContain("Return exactly one JSON object");
-    expect(task.prompt).toContain("ai-lab.wiki-reflection-result.v1");
+    expect(task.prompt).toContain("ai-lab.wiki-reflection-result.v2");
     expect(task.expectedFiles).toEqual([
       "pages/decisions/*.md",
       "pages/failures/*.md",
@@ -678,6 +713,7 @@ describe("wiki", () => {
         title: "Review Scope",
         slug: "review-scope",
         summary: "Check the requested scope before reviewing.",
+        retrievalTerms: ["memory scope review", "기억 범위 검토"],
         whenToUse: "Use this when a request can refer to more than one memory layer.",
         steps: ["Restate the requested scope.", "Classify each candidate."],
         checks: ["Each candidate answers the stated scope."],
@@ -693,6 +729,7 @@ describe("wiki", () => {
         title: "Keep Raw Runs Local",
         slug: "keep-raw-runs-local",
         summary: "Keep raw runs local and promote concise memory only.",
+        retrievalTerms: ["local raw runs", "원본 실행 기록"],
         decision: "Raw runs remain local-only evidence.",
         reasoning: ["Raw runs can contain private or noisy details."],
         consequences: ["Shared pages must remain useful without the transcript."],
@@ -708,7 +745,7 @@ describe("wiki", () => {
       await initWiki(workspace);
       const task = await prepareWikiReflectionTask(workspace, reflectionInput());
       const result = {
-        schemaVersion: "ai-lab.wiki-reflection-result.v1",
+        schemaVersion: "ai-lab.wiki-reflection-result.v2",
         taskId: task.id,
         taskDigest: task.digest,
         outcome: "propose",
@@ -728,7 +765,7 @@ describe("wiki", () => {
     await initWiki(workspace);
     const task = await prepareWikiReflectionTask(workspace, reflectionInput());
     const result = {
-      schemaVersion: "ai-lab.wiki-reflection-result.v1",
+      schemaVersion: "ai-lab.wiki-reflection-result.v2",
       taskId: task.id,
       taskDigest: task.digest,
       outcome: "skip",
@@ -823,6 +860,7 @@ describe("wiki", () => {
           title: "Review Scope",
           slug: "review-scope",
           summary: "Review the requested scope.",
+          retrievalTerms: ["requested scope"],
           whenToUse: "Use this before memory review.",
           steps: [],
           checks: ["The scope matches."],
@@ -839,6 +877,7 @@ describe("wiki", () => {
           title: "Keep Runs Local",
           slug: "keep-runs-local",
           summary: "Keep runs local.",
+          retrievalTerms: ["local raw runs"],
           decision: "Raw runs remain local.",
           reasoning: [],
           consequences: ["Shared memory stays concise."],
@@ -931,7 +970,7 @@ describe("wiki", () => {
 
     expect(context.memories.map(({ kind }) => kind)).toEqual(["playbook", "failure", "decision"]);
     expect(context.memories).toHaveLength(3);
-    expect(context.memories.every(({ matchedTerms }) => matchedTerms.length === 3)).toBe(true);
+    expect(context.memories.every(({ matchedTerms }) => matchedTerms.length === 2)).toBe(true);
     expect(parseWikiMemoryContext(context)).toEqual(context);
     await expect(validateCurrentWikiMemoryContext(workspace, context, now())).resolves.toEqual(
       context,
@@ -978,6 +1017,20 @@ describe("wiki", () => {
     expect(memories).toMatchObject([
       { score: 19, matchedTerms: ["body", "slug", "summary", "title"] },
     ]);
+    expect(
+      selectWikiMemories(
+        [{ ...candidate, retrievalTerms: ["personal context", "기억 범위"] }],
+        "대화의 기억 범위를 확인해",
+        now(),
+      ),
+    ).toMatchObject([{ score: 10, matchedTerms: ["범위"] }]);
+    expect(
+      selectWikiMemories(
+        [{ ...candidate, retrievalTerms: ["기억 범위"] }],
+        "일반적인 기억 검색",
+        now(),
+      ),
+    ).toEqual([]);
     expect(selectWikiMemories([candidate], "what is the", now())).toEqual([]);
     expect(() => selectWikiMemories([candidate], "query", now(), 4)).toThrow("limit");
     expect(() => selectWikiMemories([candidate], "\n", now())).toThrow("one-line");
@@ -1088,7 +1141,10 @@ describe("wiki", () => {
     await writeRawSource(workspace.root);
     await writeMemoryPage(workspace.root, "playbook", "LLM Wiki Review", "active");
 
-    const task = await prepareWikiAnswerTask(workspace, answerTaskInput());
+    const task = await prepareWikiAnswerTask(
+      workspace,
+      answerTaskInput("How should LLM Wiki review work?"),
+    );
 
     expect(task.memories.map(({ path }) => path)).toEqual(["pages/playbooks/llm-wiki-review.md"]);
     expect(task.contexts.map(({ path }) => path)).toContain(task.memories[0]?.path);
@@ -1124,7 +1180,10 @@ describe("wiki", () => {
     await initWiki(workspace);
     await writeRawSource(workspace.root);
     await writeMemoryPage(workspace.root, "failure", "LLM Wiki Scope Failure", "active");
-    const task = await prepareWikiAnswerTask(workspace, answerTaskInput());
+    const task = await prepareWikiAnswerTask(
+      workspace,
+      answerTaskInput("How should LLM Wiki handle a scope failure?"),
+    );
     const memory = task.memories[0];
     if (memory === undefined) throw new Error("Expected a selected memory");
     const input = {
@@ -1158,6 +1217,69 @@ describe("wiki", () => {
         assessments: [{ path: "pages/failures/unselected.md", verdict: "helpful" }],
       }),
     ).rejects.toThrow("assess every selected memory");
+  });
+
+  it("binds a no-memory control and records a paired human comparison", async () => {
+    const workspace = await tempWorkspace();
+    await initWiki(workspace);
+    await writeRawSource(workspace.root);
+    await writeMemoryPage(workspace.root, "failure", "LLM Wiki Scope Failure", "active");
+    const task = await prepareWikiAnswerTask(
+      workspace,
+      answerTaskInput("How should LLM Wiki handle a scope failure?"),
+    );
+    const memory = task.memories[0];
+    if (memory === undefined) throw new Error("Expected a selected memory");
+    const control = await prepareWikiMemoryControlTask(workspace, task);
+    const memoryResult = answerResultForTask(task, "The answer keeps the requested scope.");
+    const controlResult = answerResultForTask(control, "The answer describes a generic process.");
+    const judgment = {
+      preference: "memory" as const,
+      assessments: [{ path: memory.path, verdict: "helpful" as const }],
+      note: "The memory arm follows the requested scope.",
+    };
+
+    expect(control.memories).toEqual([]);
+    expect(control.contexts.map(({ path }) => path)).not.toContain(memory.path);
+    expect(control.evidence).toEqual(task.evidence);
+    expect(control.question).toBe(task.question);
+    expect(control.instructions).not.toContainEqual(expect.stringContaining("guidance only"));
+    expect(parseWikiMemoryComparisonJudgmentInput(judgment)).toEqual(judgment);
+    await expect(
+      recordWikiMemoryComparison(
+        workspace,
+        {
+          task,
+          controlTask: { ...control, digest: "0".repeat(64) },
+          memoryResult,
+          controlResult,
+          judgment,
+        },
+        now(),
+      ),
+    ).rejects.toThrow();
+
+    const record = await recordWikiMemoryComparison(
+      workspace,
+      { task, controlTask: control, memoryResult, controlResult, judgment },
+      now(),
+    );
+    const summary = await summarizeWikiMemoryEvaluations(workspace);
+
+    expect(record).toMatchObject({
+      mode: "comparison",
+      taskOutcome: "improved",
+      comparison: {
+        controlTaskId: control.id,
+        controlTaskDigest: control.digest,
+        preference: "memory",
+      },
+    });
+    expect(summary).toMatchObject({
+      evaluations: 1,
+      comparisons: 1,
+      counts: { memoryPreferred: 1, controlPreferred: 0, tied: 0 },
+    });
   });
 
   it("rejects ambiguous or oversized task evidence", async () => {
@@ -2504,9 +2626,9 @@ function answerInput() {
   };
 }
 
-function answerTaskInput() {
+function answerTaskInput(question = "How does LLM Wiki work?") {
   return {
-    question: "How does LLM Wiki work?",
+    question,
     sourceIds: ["karpathy-llm-wiki"],
   };
 }
@@ -2525,6 +2647,10 @@ function answerTaskResult(task: WikiAnswerTask) {
       },
     ],
   };
+}
+
+function answerResultForTask(task: WikiAnswerTask, summary: string) {
+  return { ...answerTaskResult(task), summary };
 }
 
 function rebuildTaskInput() {
@@ -2718,7 +2844,7 @@ function reflectionInput() {
 
 function reflectionResult(task: { id: string; digest: string }): WikiReflectionResult {
   return {
-    schemaVersion: "ai-lab.wiki-reflection-result.v1",
+    schemaVersion: "ai-lab.wiki-reflection-result.v2",
     taskId: task.id,
     taskDigest: task.digest,
     outcome: "propose",
@@ -2728,6 +2854,7 @@ function reflectionResult(task: { id: string; digest: string }): WikiReflectionR
       title: "Scope Mismatch",
       slug: "scope-mismatch",
       summary: "Answer the memory scope the user requested.",
+      retrievalTerms: ["requested memory scope", "요청한 기억 범위"],
       failure: "The response replaced the requested scope with a generic process lesson.",
       trigger: "A user asks what should be remembered from a conversation.",
       correction: [
@@ -2852,6 +2979,7 @@ async function writeMemoryPage(
     createdAt: "2026-06-17T12:00:00.000Z",
     updatedAt: "2026-06-17T12:00:00.000Z",
     reviewAfter: options.reviewAfter ?? "2027-06-17T12:00:00.000Z",
+    retrievalTerms: [title],
     sources: [],
   };
   await writeFile(
