@@ -68,6 +68,7 @@ pnpm cli wiki answer run \
   --runner-id my-wrapper \
   --runner-executable /absolute/path/to/my-wrapper \
   --runner-args-json '[]' \
+  --runner-trusted-files-json '[]' \
   --accept-task-digest "<full-task-digest>" \
   --trust-runner my-wrapper \
   --accept-runner-digest "<full-disclosed-runner-digest>"
@@ -89,6 +90,10 @@ An external runner must implement ai-lab's stdin/stdout envelope. Do not assume 
 CLI implements this contract directly. A provider adapter is an audited wrapper around that CLI and
 its out-of-band login. ai-lab does not request an API key, but it also cannot prove whether the
 wrapped tool used a subscription or API billing path.
+
+The repository includes exact-version Codex and Claude subscription CLI profiles. They reuse a
+separately established account login without requiring an API key from ai-lab. Setup, supported
+versions, and important limits are in `docs/subscription-runner.md`.
 
 The wrapper is a trusted same-user executable, not a sandbox. It can access or modify files,
 credentials, processes, and the network with your OS permissions. A private temporary working
@@ -113,6 +118,7 @@ Implement reusable code in `packages/*`, expose human-facing flows from `apps/cl
 - `docs/development-guide.md`
 - `docs/testing-guide.md`
 - `docs/external-runner.md`
+- `docs/subscription-runner.md`
 - `docs/contribution-guide.md`
 - `docs/self-evolution-guide.md`
 - `docs/subbrain-design.md`

@@ -1,5 +1,7 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { stat } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ModelProfile, ModelRequest } from "@ai-lab/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,11 +12,14 @@ import {
   ModelRouter,
   createDefaultModelRouter,
   createFakeModelProfiles,
+  externalRunnerFileSha256,
   externalRunnerProtocol,
   externalRunnerProtocolVersion,
 } from "../src/index.js";
 
 const runnerFixture = fileURLToPath(new URL("./fixtures/external-runner.mjs", import.meta.url));
+const executableSha256 = await externalRunnerFileSha256(process.execPath);
+const runnerFixtureSha256 = await externalRunnerFileSha256(runnerFixture);
 const externalProfile: ModelProfile = {
   task: "general",
   kind: "external-runner",
@@ -121,17 +126,51 @@ describe("external runner provider", () => {
 
   it("snapshots static arguments instead of observing later mutation", async () => {
     const args = [runnerFixture, "success"];
+    const trustedFiles = [{ path: runnerFixture, sha256: runnerFixtureSha256 }];
     const provider = new ExternalRunnerModelProvider({
       provider: "fixture-runner",
       executable: process.execPath,
+      executableSha256,
       args,
       envAllowlist: [],
+      trustedFiles,
     });
     args[1] = "timeout";
+    trustedFiles[0] = { path: runnerFixture, sha256: "0".repeat(64) };
 
     await expect(provider.generate(externalRequest, externalProfile)).resolves.toMatchObject({
       output: "hello runner",
     });
+  });
+
+  it("rechecks the executable and trusted static files before spawn", async () => {
+    const executableMismatch = new SpawnCountingExternalRunnerProvider(
+      externalRunnerConfig("success", { executableSha256: "0".repeat(64) }),
+    );
+    await expect(executableMismatch.generate(externalRequest, externalProfile)).rejects.toThrow(
+      "executable SHA-256 mismatch",
+    );
+    expect(executableMismatch.spawnCount).toBe(0);
+
+    const root = await mkdtemp(join(tmpdir(), "ai-lab-runner-integrity-"));
+    const trustedPath = join(root, "adapter.mjs");
+    try {
+      await writeFile(trustedPath, "export const version = 1;\n");
+      const trustedSha256 = await externalRunnerFileSha256(trustedPath);
+      const trustedMismatch = new SpawnCountingExternalRunnerProvider(
+        externalRunnerConfig("success", {
+          trustedFiles: [{ path: trustedPath, sha256: trustedSha256 }],
+        }),
+      );
+      await writeFile(trustedPath, "export const version = 2;\n");
+
+      await expect(trustedMismatch.generate(externalRequest, externalProfile)).rejects.toThrow(
+        "trusted file SHA-256 mismatch",
+      );
+      expect(trustedMismatch.spawnCount).toBe(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("rejects oversized request, stdout, and stderr payloads", async () => {
@@ -201,12 +240,12 @@ describe("external runner provider", () => {
   it("aborts a running process and removes its signal listener", async () => {
     const controller = new AbortController();
     const remove = vi.spyOn(controller.signal, "removeEventListener");
-    const running = externalRunner("timeout", { timeoutMs: 10_000 }).generate(
-      externalRequest,
-      externalProfile,
-      controller.signal,
+    const provider = new SpawnCountingExternalRunnerProvider(
+      externalRunnerConfig("timeout", { timeoutMs: 10_000 }),
     );
-    setTimeout(() => controller.abort(), 50);
+    const running = provider.generate(externalRequest, externalProfile, controller.signal);
+    await provider.waitUntilSpawned();
+    controller.abort();
 
     await expect(running).rejects.toMatchObject({
       name: "AbortError",
@@ -267,8 +306,10 @@ describe("external runner provider", () => {
         new ExternalRunnerModelProvider({
           provider: "fixture-runner",
           executable: "node",
+          executableSha256,
           args: [],
           envAllowlist: [],
+          trustedFiles: [],
         }),
     ).toThrow("absolute executable");
     await expect(
@@ -313,8 +354,10 @@ describe("external runner provider", () => {
         new ExternalRunnerModelProvider({
           provider: "fixture-runner",
           executable: process.execPath,
+          executableSha256,
           args: [runnerFixture, "success"],
           envAllowlist: [],
+          trustedFiles: [{ path: runnerFixture, sha256: runnerFixtureSha256 }],
           unexpected: true,
         } as ExternalRunnerConfig),
     ).toThrow("config contains unknown or missing fields");
@@ -342,6 +385,25 @@ describe("external runner provider", () => {
       "stderr limit must be between",
     );
   });
+
+  it("rejects invalid integrity metadata", () => {
+    expect(() => externalRunner("success", { executableSha256: "ABC" })).toThrow(
+      "executable SHA-256",
+    );
+    expect(() =>
+      externalRunner("success", {
+        trustedFiles: [{ path: "relative.mjs", sha256: "0".repeat(64) }],
+      }),
+    ).toThrow("trusted file path must be absolute");
+    expect(() =>
+      externalRunner("success", {
+        trustedFiles: [
+          { path: runnerFixture, sha256: runnerFixtureSha256 },
+          { path: runnerFixture, sha256: runnerFixtureSha256 },
+        ],
+      }),
+    ).toThrow("paths must be unique");
+  });
 });
 
 function externalRunner(
@@ -358,10 +420,30 @@ function externalRunnerConfig(
   return {
     provider: "fixture-runner",
     executable: process.execPath,
+    executableSha256,
     args: [runnerFixture, mode],
     envAllowlist: [],
+    trustedFiles: [{ path: runnerFixture, sha256: runnerFixtureSha256 }],
     ...overrides,
   };
+}
+
+class SpawnCountingExternalRunnerProvider extends ExternalRunnerModelProvider {
+  spawnCount = 0;
+  private resolveSpawned: (() => void) | undefined;
+  private readonly spawned = new Promise<void>((resolve) => {
+    this.resolveSpawned = resolve;
+  });
+
+  waitUntilSpawned(): Promise<void> {
+    return this.spawned;
+  }
+
+  protected override spawnRunner(cwd: string) {
+    this.spawnCount += 1;
+    this.resolveSpawned?.();
+    return super.spawnRunner(cwd);
+  }
 }
 
 class StreamErrorExternalRunnerProvider extends ExternalRunnerModelProvider {

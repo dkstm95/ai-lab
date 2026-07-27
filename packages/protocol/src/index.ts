@@ -20,9 +20,19 @@ export const modelMessageSchema = z.object({
 });
 export type ModelMessage = z.infer<typeof modelMessageSchema>;
 
+export const modelResponseFormatSchema = z
+  .object({
+    type: z.literal("json_schema"),
+    name: z.string().min(1).max(128),
+    schema: z.record(z.string(), z.unknown()),
+  })
+  .strict();
+export type ModelResponseFormat = z.infer<typeof modelResponseFormatSchema>;
+
 export const modelRequestSchema = z.object({
   task: modelTaskSchema.default("general"),
   messages: z.array(modelMessageSchema).min(1),
+  responseFormat: modelResponseFormatSchema.optional(),
 });
 export type ModelRequest = z.infer<typeof modelRequestSchema>;
 

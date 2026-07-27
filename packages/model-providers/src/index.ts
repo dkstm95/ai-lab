@@ -3,6 +3,7 @@ import type { ModelProfile, ModelRequest, ModelResponse, ModelTask } from "@ai-l
 
 export {
   ExternalRunnerModelProvider,
+  externalRunnerFileSha256,
   externalRunnerProtocol,
   externalRunnerProtocolVersion,
 } from "./external-runner.js";
@@ -10,7 +11,24 @@ export type {
   ExternalRunnerConfig,
   ExternalRunnerRequestEnvelope,
   ExternalRunnerResponseEnvelope,
+  ExternalRunnerTrustedFile,
 } from "./external-runner.js";
+export {
+  inspectSubscriptionRunner,
+  reasoningEfforts,
+  runSubscriptionRunner,
+  subscriptionLaunchers,
+  subscriptionProfileIds,
+  subscriptionRunnerManifestVersion,
+  subscriptionRunnerVersion,
+} from "./subscription-runner.js";
+export type {
+  ReasoningEffort,
+  SubscriptionLauncher,
+  SubscriptionProfileId,
+  SubscriptionRunnerConfig,
+  SubscriptionRunnerManifest,
+} from "./subscription-runner.js";
 
 export interface ModelProvider {
   readonly kind: ModelProfile["kind"];

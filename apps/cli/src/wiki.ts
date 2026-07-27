@@ -9,6 +9,7 @@ import {
   type WikiAnswerTask,
   WikiAnswerWorkflow,
   type WikiProposal,
+  externalRunnerFileSha256,
 } from "@ai-lab/agent-runtime";
 import { createDefaultWorkspace, createWorkspace } from "@ai-lab/workspace";
 import type { CAC } from "cac";
@@ -41,6 +42,7 @@ interface RunnerOptions {
   readonly runnerEnv?: string;
   readonly runnerExecutable?: string;
   readonly runnerId?: string;
+  readonly runnerTrustedFilesJson?: string;
   readonly runnerTimeoutMs?: number | string;
   readonly trustRunner?: string;
 }
@@ -61,7 +63,7 @@ interface ArtifactReservation {
 
 const maxArtifactBytes = 8_000_000;
 const defaultRunnerTimeoutMs = 120_000;
-const runnerConsentSchemaVersion = "ai-lab.external-runner-config.v1";
+const runnerConsentSchemaVersion = "ai-lab.external-runner-config.v2";
 const runnerTerminationSignals: readonly NodeJS.Signals[] =
   process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
 
@@ -79,6 +81,7 @@ export function registerWikiCommands(cli: CAC, root?: string): void {
     .option("--runner-executable <path>", "Absolute external runner executable")
     .option("--runner-args-json <json>", "Static argument JSON array, default []")
     .option("--runner-env <names>", "Comma-separated environment name allowlist")
+    .option("--runner-trusted-files-json <json>", "Trusted static file path JSON array")
     .option("--runner-timeout-ms <ms>", "External runner timeout in milliseconds")
     .option("--accept-task-digest <digest>", "Full disclosed task digest")
     .option("--accept-runner-digest <digest>", "Full disclosed runner config digest")
@@ -162,7 +165,7 @@ async function discloseAndRun(
   task: WikiAnswerTask,
   options: WikiCommandOptions,
 ): Promise<void> {
-  const config = runnerConfig(options);
+  const config = await runnerConfig(options);
   console.log(formatWikiRunnerDisclosure(task, config));
   assertRunnerConsent(task, config, options);
   const saved = await withTerminationAbort((signal) =>
@@ -179,21 +182,48 @@ async function discloseAndRun(
   );
 }
 
-function runnerConfig(options: RunnerOptions): ExternalRunnerConfig {
+async function runnerConfig(options: RunnerOptions): Promise<ExternalRunnerConfig> {
   const executable = requiredText(options.runnerExecutable, "--runner-executable");
   if (!isAbsolute(executable)) {
     throw new Error("--runner-executable must be an absolute path");
   }
+  const trustedFiles = runnerTrustedFilePaths(options.runnerTrustedFilesJson, executable);
   return {
     provider: requiredText(options.runnerId, "--runner-id"),
     executable,
+    executableSha256: await externalRunnerFileSha256(executable),
     args: runnerArguments(options.runnerArgsJson),
     envAllowlist: runnerEnvironment(options.runnerEnv),
+    trustedFiles: await Promise.all(
+      trustedFiles.map(async (path) => ({
+        path,
+        sha256: await externalRunnerFileSha256(path),
+      })),
+    ),
     timeoutMs: positiveInteger(
       options.runnerTimeoutMs ?? defaultRunnerTimeoutMs,
       "--runner-timeout-ms",
     ),
   };
+}
+
+function runnerTrustedFilePaths(value: string | undefined, executable: string): string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value ?? "[]");
+  } catch {
+    throw new Error("--runner-trusted-files-json must be an absolute path JSON string array");
+  }
+  if (
+    !Array.isArray(parsed) ||
+    parsed.some((path) => typeof path !== "string" || !isAbsolute(path))
+  ) {
+    throw new Error("--runner-trusted-files-json must be an absolute path JSON string array");
+  }
+  if (new Set(parsed).size !== parsed.length || parsed.includes(executable)) {
+    throw new Error("--runner-trusted-files-json paths must be unique and exclude the executable");
+  }
+  return [...parsed].sort();
 }
 
 function runnerArguments(value?: string): string[] {
@@ -562,6 +592,7 @@ export function formatWikiRunnerDisclosure(
       "The runner may access or modify same-user files, credentials, processes, and network resources.",
       "The host does not verify whether the runner uses subscription access or incurs API billing.",
       "No-auto-apply constrains only the host workflow; the runner executable may have its own side effects.",
+      "Only the executable and explicitly listed trusted files are integrity checked before spawn.",
     ],
     runner: { ...runner, digest: wikiRunnerConfigDigest(config) },
     task: {
@@ -586,8 +617,12 @@ function canonicalRunnerConfig(config: ExternalRunnerConfig) {
     schemaVersion: runnerConsentSchemaVersion,
     provider: config.provider,
     executable: config.executable,
+    executableSha256: config.executableSha256,
     args: [...config.args],
     envAllowlist: [...config.envAllowlist].sort(),
+    trustedFiles: [...config.trustedFiles]
+      .map((file) => ({ path: file.path, sha256: file.sha256 }))
+      .sort((left, right) => left.path.localeCompare(right.path)),
     timeoutMs: config.timeoutMs ?? defaultRunnerTimeoutMs,
   };
 }

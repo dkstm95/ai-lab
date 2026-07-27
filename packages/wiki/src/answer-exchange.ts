@@ -2,6 +2,32 @@ import { createHash } from "node:crypto";
 
 export const wikiAnswerTaskSchemaVersion = "ai-lab.wiki-answer-task.v1";
 export const wikiAnswerResultSchemaVersion = "ai-lab.wiki-answer-result.v1";
+export const wikiAnswerResultJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    schemaVersion: { const: wikiAnswerResultSchemaVersion },
+    taskId: { type: "string", minLength: 1, maxLength: 500 },
+    taskDigest: { type: "string", pattern: "^[a-f0-9]{64}$" },
+    question: { type: "string", minLength: 1, maxLength: 10_000 },
+    summary: { type: "string", minLength: 1, maxLength: 100_000 },
+    acceptedClaims: {
+      type: "array",
+      minItems: 1,
+      maxItems: 100,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          text: { type: "string", minLength: 1, maxLength: 10_000 },
+          sourceId: { type: "string", minLength: 1 },
+        },
+        required: ["text", "sourceId"],
+      },
+    },
+  },
+  required: ["schemaVersion", "taskId", "taskDigest", "question", "summary", "acceptedClaims"],
+} as const;
 
 export interface WikiAnswerTaskContext {
   readonly path: string;

@@ -68,6 +68,7 @@ pnpm cli wiki answer run \
   --runner-id my-wrapper \
   --runner-executable /absolute/path/to/my-wrapper \
   --runner-args-json '[]' \
+  --runner-trusted-files-json '[]' \
   --accept-task-digest "<전체-task-digest>" \
   --trust-runner my-wrapper \
   --accept-runner-digest "<공개된-전체-runner-digest>"
@@ -89,6 +90,10 @@ apply는 별도 명령으로 남는다.
 직접 구현한다고 가정하면 안 된다. provider adapter는 해당 CLI와 별도 로그인을 감싸는
 감사된 wrapper다. ai-lab은 API key를 요구하지 않지만, wrapper가 구독 또는 API 과금 중
 어느 경로를 사용했는지 증명하지도 못한다.
+
+저장소에는 정확한 버전을 고정한 Codex와 Claude 구독 CLI profile이 포함된다. ai-lab에
+API key를 주지 않고 별도로 로그인한 계정을 사용한다. 설정법, 지원 버전, 중요한 한계는
+`docs/subscription-runner.md`에 정리되어 있다.
 
 wrapper는 sandbox가 아니라 같은 사용자 권한으로 실행되는 신뢰된 프로그램이다. 따라서
 사용자의 파일, credential, process, network에 접근하거나 이를 바꿀 수 있다. 비공개 임시
@@ -121,6 +126,7 @@ pnpm check
 - `docs/development-guide.md`
 - `docs/testing-guide.md`
 - `docs/external-runner.md`
+- `docs/subscription-runner.md`
 - `docs/contribution-guide.md`
 - `docs/self-evolution-guide.md`
 - `docs/subbrain-design.md`

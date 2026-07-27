@@ -30,6 +30,7 @@ import {
 export {
   parseWikiAnswerResult,
   parseWikiAnswerTask,
+  wikiAnswerResultJsonSchema,
   wikiAnswerResultSchemaVersion,
   wikiAnswerTaskSchemaVersion,
 } from "./answer-exchange.js";

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { EchoTool } from "@ai-lab/local-tools";
-import { FakeModelProvider, ModelRouter } from "@ai-lab/model-providers";
+import { FakeModelProvider, ModelRouter, externalRunnerFileSha256 } from "@ai-lab/model-providers";
 import { addWikiSource, initWiki, prepareWikiQuery } from "@ai-lab/wiki";
 import { createWorkspace } from "@ai-lab/workspace";
 import { afterEach, describe, expect, it } from "vitest";
@@ -16,6 +16,8 @@ import {
 
 const roots: string[] = [];
 const runnerFixture = fileURLToPath(new URL("./fixtures/wiki-runner.mjs", import.meta.url));
+const executableSha256 = await externalRunnerFileSha256(process.execPath);
+const runnerFixtureSha256 = await externalRunnerFileSha256(runnerFixture);
 
 afterEach(async () => {
   await Promise.all(roots.map((root) => rm(root, { recursive: true, force: true })));
@@ -193,8 +195,10 @@ function externalRunner(mode: string, argument?: string): ExternalRunnerConfig {
   return {
     provider: "wiki-fixture",
     executable: process.execPath,
+    executableSha256,
     args: argument === undefined ? [runnerFixture, mode] : [runnerFixture, mode, argument],
     envAllowlist: [],
+    trustedFiles: [{ path: runnerFixture, sha256: runnerFixtureSha256 }],
   };
 }
 

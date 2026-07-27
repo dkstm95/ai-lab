@@ -2,29 +2,27 @@
 
 ## Status
 
-The external runner is a vendor-neutral protocol primitive. It lets the Wiki workflow call an
-explicitly trusted executable without adding a model API SDK or API key to ai-lab.
+The external runner is a vendor-neutral protocol primitive. It calls an explicitly trusted
+executable without adding a model API SDK or API key to ai-lab.
 
-It is not a ready-made Codex, Claude Code, Gemini, or other vendor adapter. An official CLI can be
-used only through an audited wrapper that implements this contract. The wrapper owns
-provider-specific flags and its separately established login session.
+An official CLI requires an audited wrapper that owns provider-specific flags and its established
+login session. Built-in Codex and Claude wrappers are in `docs/subscription-runner.md`.
 
-`wiki answer run` stops at a task-bound result artifact. It does not prepare a proposal, apply a
-page, or append a Wiki audit entry. Those actions remain explicit later commands.
+`wiki answer run` stops at a task-bound result artifact. Proposal, apply, and audit actions remain
+explicit later commands.
 
 Before starting the process, the CLI:
 
 1. validates that the task still matches the current Wiki;
 2. prints every outbound context path, SHA-256, and UTF-8 byte count;
-3. prints the runner id, absolute executable, static arguments, allowed environment names, effective
-   timeout, and a SHA-256 digest of that canonical runner manifest;
+3. prints the runner id, executable and trusted file paths and SHA-256 values, static arguments,
+   allowed environment names, timeout, and canonical manifest digest;
 4. requires the full task digest, runner id, and runner manifest digest to match explicit consent
    options; and
 5. reserves the result path as a new private regular file.
 
-The runner is not started when consent is missing, a digest differs, or the output already exists.
-The CLI takes runner configuration only from explicit host command options. It does not read an
-executable or arguments from the task, model output, or a workspace runner configuration file.
+The runner is not started when consent is missing, a digest differs, or output already exists. Its
+executable and arguments come only from host options, never task, model output, or workspace files.
 
 ## Command
 
@@ -35,20 +33,22 @@ pnpm cli wiki answer run \
   --runner-id my-wrapper \
   --runner-executable /absolute/path/to/my-wrapper \
   --runner-args-json '[]' \
+  --runner-trusted-files-json '[]' \
   --runner-timeout-ms 120000 \
   --accept-task-digest "<full-disclosed-task-digest>" \
   --trust-runner my-wrapper \
   --accept-runner-digest "<full-disclosed-runner-digest>"
 ```
 
-`--runner-env HOME,LANG` may copy named values from the host into an otherwise fresh environment.
-Use the smallest set the wrapper needs. Values are not printed or included in the consent digest.
-Sensitive and process-injection variable names are rejected. Do not place credentials in arguments.
+`--runner-env HOME,LANG` copies only named values into a fresh environment. Values are not printed
+or digested; sensitive and process-injection names are rejected. Do not put credentials in args.
 
-The command prints the disclosure before checking consent, so it is safe to omit or deliberately
-mismatch the acceptance values on the first invocation. Inspect the disclosure, then repeat the
-same command with the exact full digests. A changed executable, argument, environment name, or
-timeout produces a different runner digest.
+`--runner-trusted-files-json` lists absolute static file paths. The CLI discloses each SHA-256;
+files must be regular, non-symlink, and not group/world-writable. Unlisted files are not checked.
+
+The command prints disclosure before checking consent, so the first invocation may omit or mismatch
+acceptance values. Inspect it, then repeat with the exact digests. Changed executable or trusted-file
+bytes, arguments, environment names, or timeout produce a different runner digest.
 
 ## Process Boundary
 
@@ -56,6 +56,7 @@ The host starts the wrapper with these rules:
 
 - the executable path is absolute;
 - arguments are a static string array;
+- the executable and explicitly trusted static files are SHA-256 checked immediately before spawn;
 - no shell is used;
 - the request is sent through standard input, never command arguments;
 - the working directory is a new mode-`0700` temporary directory;
@@ -67,9 +68,8 @@ The host starts the wrapper with these rules:
 - no retry or provider failover occurs; and
 - the task is checked against the current Wiki again after the runner returns.
 
-The default timeout is 120 seconds and cannot exceed 10 minutes. The default request and standard
-output limit is 1.1 MB each. The default standard error limit is 64 KiB. Each byte limit has a
-16 MiB hard ceiling.
+The timeout defaults to 120 seconds and cannot exceed 10 minutes. Request and output default to
+1.1 MB, standard error to 64 KiB, and no byte limit can exceed 16 MiB.
 
 On POSIX, SIGINT, SIGTERM, SIGHUP, timeout, and cancellation kill the runner process group. The host
 also has a bounded settlement deadline so a descendant holding inherited output pipes cannot hang the
@@ -86,11 +86,14 @@ The wrapper reads exactly one JSON request from standard input:
   "requestId": "<host-generated-id>",
   "request": {
     "task": "reasoning",
-    "messages": [{ "role": "user", "content": "<complete Wiki task prompt>" }]
+    "messages": [{ "role": "user", "content": "<complete Wiki task prompt>" }],
+    "responseFormat": { "type": "json_schema", "name": "wiki_answer_result", "schema": {} }
   },
   "profile": { "task": "reasoning", "kind": "external-runner", "provider": "my-wrapper" }
 }
 ```
+
+The Wiki request carries the full static result schema; `{}` above abbreviates that schema.
 
 It writes exactly one JSON response to standard output:
 
@@ -126,15 +129,11 @@ the Wiki task/result contract.
 
 ## Trust Limit
 
-The runner is a trusted same-user executable, not an OS sandbox. It can read or modify any file and
-credential available to the user, inspect other processes, and use the network. The temporary
-directory and environment filtering reduce accidental leakage only.
+The runner is trusted same-user code, not a sandbox. It can access files, credentials, processes,
+and the network. The temporary directory and environment filter only reduce accidental leakage.
 
 The host's “result only” rule means the host workflow does not call proposal or apply. It cannot
 stop a runner from modifying the live Wiki or other files itself. The post-run task check detects
 some such changes and rejects the result, but it cannot undo them. Strong isolation requires a
 separate OS user, container, or virtual machine with an explicit filesystem and network policy.
-
-ai-lab also cannot determine whether a wrapped provider used subscription entitlement, API
-credits, a local model, or another billing path. That guarantee belongs to the selected wrapper,
-provider CLI, and authenticated session.
+Node has no portable descriptor-based `exec`, so same-user code can still race the final path spawn.

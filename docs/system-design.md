@@ -26,7 +26,7 @@ docs/
 
 - `packages/protocol`: Zod schemas, shared interfaces, and request/result types. It must not depend on internal packages, vendor SDKs, MCP SDKs, Hono, or Node runtime implementation modules.
 - `packages/config`: environment, workspace root, provider profile, and model routing config. It depends on `protocol`.
-- `packages/model-providers`: provider adapters and routing. It supports API, external runner, manual, and fake provider kinds. It implements deterministic fake providers and the strict process boundary for trusted external-runner wrappers, but no vendor-specific subscription adapter.
+- `packages/model-providers`: provider adapters and routing. It supports API, external runner, manual, and fake provider kinds. It implements deterministic fake providers, the strict process boundary for trusted external-runner wrappers, and exact-version Codex and Claude subscription CLI profiles.
 - `packages/agent-runtime`: agent execution flow and trusted application workflows. It calls model providers and local tools, returns normalized run results, and composes the provider-neutral Wiki answer flow for human-facing adapters. It does not know CLI, HTTP, MCP, or provider transport details.
 - `packages/workspace`: local workspace behavior such as root selection, slug creation, and path-oriented helpers.
 - `packages/wiki`: local markdown LLM Wiki behavior such as wiki layout, source registration, portable task/result schemas, digest-bound answer proposals, explicit claim/source pairs, approval and stale-hash gates, candidate validation, rollback-capable promotion, audit logs, metadata, and deterministic linting. Trusted integrations own source selection and reviewer authentication. The package has no provider, process, network, agent-loop, or CLI knowledge.
@@ -66,7 +66,7 @@ protocol -> no internal deps
 Model providers must not be assumed to be API-only.
 
 - `api`: OpenAI, Anthropic, Gemini, Kimi, local API-compatible servers.
-- `external-runner`: trusted wrappers around official CLIs or local runners. The implemented primitive uses a vendor-neutral stdin/stdout envelope; an official CLI is not supported until an audited wrapper implements that envelope.
+- `external-runner`: trusted wrappers around official CLIs or local runners. The primitive uses a vendor-neutral stdin/stdout envelope. The built-in subscription runner implements separately audited, exact-version Codex and Claude profiles without changing that envelope.
 - `manual`: export a self-contained task for a user to run anywhere, then import a strict result. The Wiki CLI implements this without treating a paused human workflow as a synchronous model provider.
 - `fake`: deterministic provider used by tests and smoke commands.
 
@@ -77,8 +77,8 @@ network, API key, subscription CLI, browser automation, or unofficial bypass.
 
 The host supplies runner configuration explicitly. A task, model response, or workspace file cannot
 choose the executable or arguments. Before process creation, the CLI discloses every outbound
-context and binds the absolute executable, static arguments, allowed environment names, and timeout
-to a second consent digest.
+context and binds the absolute executable and trusted-file hashes, static arguments, allowed
+environment names, and timeout to a second consent digest.
 
 The process adapter uses no shell, sends model input over standard input, starts with a fresh
 environment in a private temporary directory, enforces resource limits, and requires a strict
@@ -90,14 +90,15 @@ credentials, processes, and the network. Post-run validation can reject detected
 cannot undo them. Process-group termination is best effort and cannot guarantee cleanup of detached
 descendants. Strong isolation requires a separate OS user, container, or virtual machine.
 
-The protocol does not attest the wrapper, provider, login, or billing path. ai-lab therefore does
-not claim that a run used subscription entitlement instead of API credits. The full contract is in
-`docs/external-runner.md`.
+The generic protocol does not attest the wrapper, provider, login, or billing path. Built-in
+subscription profiles preflight a narrow authenticated route and bind its sanitized result, but
+still cannot prove per-request quota or billing. The contracts are in `docs/external-runner.md` and
+`docs/subscription-runner.md`.
 
 ## Later Additions
 
-- Add separately audited wrappers for selected subscription CLIs without changing the shared
-  external-runner or Wiki task/result contracts.
+- Re-audit built-in subscription profiles for new exact CLI versions, and add another profile only
+  when its prompt transport, authentication route, and tool controls preserve the shared contracts.
 - Extend `packages/wiki` with bidirectional links, retrieval, reflection task packets, and approved self-evolution memory pages as behavior becomes concrete.
 - Extend `packages/subbrain` with embedding search, graph traversal, and relationship context after the deterministic baseline passes.
 - Add `packages/mcp` when agent runtime, local tools, or workspace capabilities need to be exposed to external agents.

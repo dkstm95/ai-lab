@@ -1,19 +1,24 @@
+import { writeFileSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
   ExternalRunnerConfig,
+  ExternalRunnerTrustedFile,
   WikiAnswerResult,
   WikiAnswerTask,
   WikiProposal,
 } from "@ai-lab/agent-runtime";
+import { externalRunnerFileSha256 } from "@ai-lab/agent-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCli } from "../src/index.js";
 import { formatWikiProposalReview, wikiRunnerConfigDigest } from "../src/wiki.js";
 
 const roots: string[] = [];
 const runnerFixture = fileURLToPath(new URL("./fixtures/wiki-runner.mjs", import.meta.url));
+const executableSha256 = await externalRunnerFileSha256(process.execPath);
+const runnerFixtureSha256 = await externalRunnerFileSha256(runnerFixture);
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -184,11 +189,13 @@ describe("cli", () => {
         expect.stringContaining("No-auto-apply"),
       ]),
       runner: {
-        schemaVersion: "ai-lab.external-runner-config.v1",
+        schemaVersion: "ai-lab.external-runner-config.v2",
         provider: "fixture-runner",
         executable: process.execPath,
+        executableSha256,
         args: [runnerFixture, "success", spawnMarker, `; touch ${shellMarker}`],
         envAllowlist: ["ALLOWED_RUNNER_VALUE"],
+        trustedFiles: [{ path: runnerFixture, sha256: runnerFixtureSha256 }],
         timeoutMs: 5000,
         digest: expect.stringMatching(/^[a-f0-9]{64}$/),
       },
@@ -250,6 +257,51 @@ describe("cli", () => {
     await expect(readFile(questionPath(root), "utf8")).resolves.toContain(
       "Runner produced durable knowledge.",
     );
+  });
+
+  it("does not spawn when a trusted static file changes after disclosure", async () => {
+    const root = await tempRoot();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const task = await prepareRunnerTask(root, log);
+    const mutableRunner = join(root, "mutable-runner.mjs");
+    await writeFile(mutableRunner, await readFile(runnerFixture));
+    const mutableSha256 = await externalRunnerFileSha256(mutableRunner);
+    const spawnMarker = join(root, "integrity-spawned");
+    const argv = runnerArgv(task, "integrity-result.json", spawnMarker, {
+      args: [mutableRunner, "success", spawnMarker],
+      trustedFiles: [{ path: mutableRunner, sha256: mutableSha256 }],
+    });
+    let changed = false;
+    log.mockImplementation((value: unknown) => {
+      if (!changed && String(value).includes('"external-runner-disclosure"')) {
+        changed = true;
+        writeFileSync(mutableRunner, "throw new Error('changed after disclosure');\n");
+      }
+    });
+
+    await expect(runCli(argv, root)).rejects.toThrow("trusted file SHA-256 mismatch");
+
+    expect(changed).toBe(true);
+    await expect(stat(spawnMarker)).rejects.toThrow();
+    await expect(
+      stat(join(root, ".ai-lab", "wiki-exchange", "integrity-result.json")),
+    ).rejects.toThrow();
+  });
+
+  it("binds executable and trusted file hashes to the runner consent digest", () => {
+    const trustedFiles = [{ path: runnerFixture, sha256: runnerFixtureSha256 }];
+    const config = runnerTestConfig([runnerFixture, "success"], undefined, trustedFiles);
+    const digest = wikiRunnerConfigDigest(config);
+
+    expect(wikiRunnerConfigDigest({ ...config, executableSha256: "0".repeat(64) })).not.toBe(
+      digest,
+    );
+    expect(
+      wikiRunnerConfigDigest({
+        ...config,
+        trustedFiles: [{ path: runnerFixture, sha256: "0".repeat(64) }],
+      }),
+    ).not.toBe(digest);
   });
 
   it("does not spawn without exact consent or when the output already exists", async () => {
@@ -528,6 +580,7 @@ interface RunnerArgvOverrides {
   readonly acceptTaskDigest?: string;
   readonly args?: readonly string[];
   readonly env?: string;
+  readonly trustedFiles?: readonly ExternalRunnerTrustedFile[];
   readonly trustRunner?: string;
 }
 
@@ -538,7 +591,10 @@ function runnerArgv(
   overrides: RunnerArgvOverrides = {},
 ): string[] {
   const args = overrides.args ?? [runnerFixture, "success", spawnMarker];
-  const config = runnerTestConfig(args, overrides.env);
+  const trustedFiles = overrides.trustedFiles ?? [
+    { path: runnerFixture, sha256: runnerFixtureSha256 },
+  ];
+  const config = runnerTestConfig(args, overrides.env, trustedFiles);
   const argv = [
     "node",
     "ai-lab",
@@ -555,6 +611,8 @@ function runnerArgv(
     process.execPath,
     "--runner-args-json",
     JSON.stringify(args),
+    "--runner-trusted-files-json",
+    JSON.stringify(trustedFiles.map((file) => file.path)),
     "--runner-timeout-ms",
     "5000",
     "--accept-task-digest",
@@ -567,16 +625,22 @@ function runnerArgv(
   return overrides.env === undefined ? argv : [...argv, "--runner-env", overrides.env];
 }
 
-function runnerTestConfig(args: readonly string[], env?: string): ExternalRunnerConfig {
+function runnerTestConfig(
+  args: readonly string[],
+  env: string | undefined,
+  trustedFiles: readonly ExternalRunnerTrustedFile[],
+): ExternalRunnerConfig {
   return {
     provider: "fixture-runner",
     executable: process.execPath,
+    executableSha256,
     args,
     envAllowlist: (env ?? "")
       .split(",")
       .map((name) => name.trim())
       .filter(Boolean)
       .sort(),
+    trustedFiles: [...trustedFiles].sort((left, right) => left.path.localeCompare(right.path)),
     timeoutMs: 5000,
   };
 }

@@ -13,7 +13,11 @@ export type {
   WikiAnswerRunnerOptions,
   WikiAnswerRunnerResult,
 } from "./wiki-workflow.js";
-export type { ExternalRunnerConfig } from "@ai-lab/model-providers";
+export { externalRunnerFileSha256 } from "@ai-lab/model-providers";
+export type {
+  ExternalRunnerConfig,
+  ExternalRunnerTrustedFile,
+} from "@ai-lab/model-providers";
 export type { WikiAnswerResult, WikiAnswerTask, WikiProposal } from "@ai-lab/wiki";
 
 export interface AgentRuntime {

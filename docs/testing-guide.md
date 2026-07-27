@@ -6,7 +6,7 @@ Tests protect package contracts and runnable lab flows. They must not call real 
 
 - `protocol`: schema acceptance and rejection.
 - `config`: default config and provider profile selection without secrets.
-- `model-providers`: deterministic fake provider, task routing, and the bounded external-runner process protocol.
+- `model-providers`: deterministic fake provider, routing, bounded external-runner protocol, and subscription profile conformance.
 - `agent-runtime`: model/tool orchestration and trusted provider-neutral Wiki workflow composition.
 - `workspace`: workspace creation and slug behavior.
 - `wiki`: markdown layout, source registration, strict task/result binding, proposal safety, promotion, metadata, and lint.
@@ -19,8 +19,9 @@ Avoid duplicate coverage. A rule should be tested at the package that owns it, w
 
 ## Provider Tests
 
-The default suite uses `FakeModelProvider` and local external-runner fixtures. Real API providers,
-network calls, and subscription CLIs must remain outside `pnpm test`.
+The default suite uses `FakeModelProvider` and local fixtures that emulate external and subscription
+CLI processes. Real API providers, network calls, credential stores, and subscription CLIs must
+remain outside `pnpm test`.
 
 Wiki workflow tests use generated task/result fixtures only. They verify that provider-neutral task
 creation and proposal preparation leave the live Wiki unchanged, stale or forged artifacts fail,
@@ -33,6 +34,10 @@ temporary directory cleanup, cancellation, bounded inherited-pipe settlement, an
 errors that do not expose model input or process output. CLI tests also prove that consent failure
 or an existing output causes zero spawns, failed runs remove an unchanged reservation, runner
 configuration changes invalidate consent, and host success creates only a result artifact.
+
+Subscription profile tests also verify exact version and authentication gates, fixed CLI arguments,
+stdin prompt transport, fresh environments, empty MCP checks, structured output parsing, manifest
+binding, file drift rejection, and target timeouts for both supported profiles.
 
 ## Coverage
 

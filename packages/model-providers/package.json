@@ -3,15 +3,22 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "ai-lab-subscription-runner": "./dist/subscription-runner.js"
+  },
   "exports": {
     ".": {
       "types": "./src/index.ts",
       "import": "./src/index.ts"
+    },
+    "./subscription-runner": {
+      "types": "./src/subscription-runner.ts",
+      "import": "./src/subscription-runner.ts"
     }
   },
   "scripts": {
-    "build": "tsup src/index.ts --format esm && tsc -p tsconfig.json --emitDeclarationOnly",
-    "test": "vitest run --root ../.. packages/model-providers/test/model-providers.test.ts",
+    "build": "tsup && tsc -p tsconfig.build.json",
+    "test": "vitest run --root ../.. packages/model-providers/test",
     "typecheck": "tsc -b"
   },
   "dependencies": {

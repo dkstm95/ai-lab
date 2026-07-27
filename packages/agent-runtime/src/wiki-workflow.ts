@@ -16,6 +16,7 @@ import {
   prepareWikiAnswerProposalFromTask,
   prepareWikiAnswerTask,
   validateCurrentWikiAnswerTask,
+  wikiAnswerResultJsonSchema,
 } from "@ai-lab/wiki";
 import type { Workspace } from "@ai-lab/workspace";
 
@@ -119,6 +120,11 @@ function runnerRequest(task: WikiAnswerTask) {
   return {
     task: "reasoning" as const,
     messages: [{ role: "user" as const, content: task.prompt }],
+    responseFormat: {
+      type: "json_schema" as const,
+      name: "wiki_answer_result",
+      schema: wikiAnswerResultJsonSchema,
+    },
   };
 }
 

@@ -14,6 +14,7 @@
 - 설치, 실행, 검증, Git hook 기준: `docs/development-guide.md`
 - 테스트 작성과 리뷰 기준: `docs/testing-guide.md`
 - 외부 runner 규약, 동의, 신뢰 경계: `docs/external-runner.md`
+- Codex·Claude 구독 CLI runner 설정과 제한: `docs/subscription-runner.md`
 - commit, PR, review 기준: `docs/contribution-guide.md`
 - 작업 회고, memory 후보, 승인 기반 자가진화 정책: `docs/self-evolution-guide.md`
 - 개인 맥락 기억 prototype의 목표, 비목표, 저장/검색/평가 기준: `docs/subbrain-design.md`
