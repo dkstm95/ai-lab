@@ -616,6 +616,58 @@ describe("wiki", () => {
     expect(report.candidateDiagnostics.issues).toEqual([]);
   });
 
+  it("rebuilds synthesis pages through validated document blocks", async () => {
+    const workspace = await tempWorkspace();
+    await prepareRebuildWiki(workspace.root);
+    const synthesisPath = join(
+      workspace.root,
+      "wiki",
+      "pages",
+      "syntheses",
+      "research-synthesis.md",
+    );
+    await writeFile(
+      synthesisPath,
+      renderWikiPage(
+        {
+          ...metadata(),
+          title: "Research Synthesis",
+          slug: "research-synthesis",
+          kind: "synthesis",
+        },
+        "## Conclusion\n\nBaseline synthesis.\n\n## Key Claims\n\n- accepted: Baseline synthesis claim.\n  source: raw/sources/karpathy-llm-wiki.md\n",
+      ),
+    );
+    const conceptPath = pagePath(workspace.root);
+    const concept = await readFile(conceptPath, "utf8");
+    await writeFile(
+      conceptPath,
+      concept.replace("- [[llm-wiki-source]]", "- [[llm-wiki-source]]\n- [[research-synthesis]]"),
+      "utf8",
+    );
+    const indexPath = join(workspace.root, "wiki", "index.md");
+    const index = await readFile(indexPath, "utf8");
+    await writeFile(
+      indexPath,
+      `${index}- [Research Synthesis](pages/syntheses/research-synthesis.md)\n`,
+      "utf8",
+    );
+
+    const task = await prepareWikiRebuildTask(workspace, rebuildTaskInput(), now());
+    const result = richSynthesisResult(task);
+    const report = await prepareWikiRebuildReport(workspace, task, result);
+    const candidate = report.files.find((file) => file.path.endsWith("research-synthesis.md"));
+
+    expect(task.targets.map((target) => target.kind)).toEqual(["concept", "source", "synthesis"]);
+    expect(task.prompt).not.toContain("Baseline synthesis.");
+    expect(candidate?.content).toContain("## Decision");
+    expect(candidate?.content).toContain("### Measure outcomes");
+    expect(candidate?.content).toContain("| Signal | Meaning \\| action |");
+    expect(candidate?.content).toContain("- hypothesis: Test the learning loop before scaling.");
+    expect(candidate?.content).toContain("source: raw/sources/karpathy-llm-wiki.md");
+    expect(report.candidateDiagnostics.issues).toEqual([]);
+  });
+
   it("preserves and compares structured hypotheses without exposing the baseline body", async () => {
     const workspace = await tempWorkspace();
     await prepareRebuildWiki(workspace.root);
@@ -946,6 +998,45 @@ describe("wiki", () => {
       () => parseWikiRebuildTask({ ...task, id: `wiki-rebuild-${"0".repeat(64)}` }),
       () => parseWikiRebuildResult(null),
       () => parseWikiRebuildResult({ ...result, unexpected: true }),
+      () =>
+        parseWikiRebuildResult({
+          ...result,
+          pages: result.pages.map((page, index) =>
+            index === 0
+              ? {
+                  path: page.path,
+                  format: "document",
+                  sections: [
+                    {
+                      heading: "Invalid table",
+                      blocks: [
+                        { type: "table", columns: ["A", "B"], rows: [["one cell"]] },
+                        { type: "acceptedClaims", claims: [firstClaim] },
+                      ],
+                    },
+                  ],
+                }
+              : page,
+          ),
+        }),
+      () =>
+        parseWikiRebuildResult({
+          ...result,
+          pages: result.pages.map((page, index) =>
+            index === 0
+              ? {
+                  path: page.path,
+                  format: "document",
+                  sections: [
+                    {
+                      heading: "Missing claims",
+                      blocks: [{ type: "paragraph", text: "No accepted claim." }],
+                    },
+                  ],
+                }
+              : page,
+          ),
+        }),
       () => parseWikiRebuildResultForTask(task, { ...result, taskId: "wrong-task" }),
       () => parseWikiRebuildResultForTask(task, { ...result, pages: result.pages.slice(1) }),
       () =>
@@ -1723,21 +1814,97 @@ function rebuildTaskInput() {
 
 function rebuildResult(task: WikiRebuildTask): WikiRebuildResult {
   return {
-    schemaVersion: "ai-lab.wiki-rebuild-result.v2",
+    schemaVersion: "ai-lab.wiki-rebuild-result.v3",
     taskId: task.id,
     taskDigest: task.digest,
-    pages: task.targets.map((target) => ({
+    pages: task.targets.map(rebuildResultPage),
+  };
+}
+
+function rebuildResultPage(target: WikiRebuildTask["targets"][number]) {
+  if (target.kind === "synthesis") {
+    return {
       path: target.path,
-      summary: target.kind === "concept" ? "Rebuilt concept summary." : "Original source summary.",
-      acceptedClaims: [
+      format: "document" as const,
+      sections: [
         {
-          text: target.kind === "concept" ? "Rebuilt concept claim." : "Original source claim.",
-          sourceId: "karpathy-llm-wiki",
+          heading: "Conclusion",
+          blocks: [
+            { type: "paragraph" as const, text: "Rebuilt synthesis." },
+            {
+              type: "acceptedClaims" as const,
+              claims: [{ text: "Rebuilt synthesis claim.", sourceId: "karpathy-llm-wiki" }],
+            },
+          ],
         },
       ],
-      hypotheses: [],
-      links: [target.kind === "concept" ? "llm-wiki-source" : "llm-wiki"],
-    })),
+    };
+  }
+  return {
+    path: target.path,
+    format: "evidence" as const,
+    summary: target.kind === "concept" ? "Rebuilt concept summary." : "Original source summary.",
+    acceptedClaims: [
+      {
+        text: target.kind === "concept" ? "Rebuilt concept claim." : "Original source claim.",
+        sourceId: "karpathy-llm-wiki",
+      },
+    ],
+    hypotheses: [],
+    links: [target.kind === "concept" ? "llm-wiki-source" : "llm-wiki"],
+  };
+}
+
+function richSynthesisResult(task: WikiRebuildTask): WikiRebuildResult {
+  const result = rebuildResult(task);
+  return {
+    ...result,
+    pages: result.pages.map((page) => {
+      if (page.format === "document") return richDocumentPage(page.path);
+      return page.path.includes("/concepts/")
+        ? { ...page, links: [...page.links, "research-synthesis"] }
+        : page;
+    }),
+  };
+}
+
+function richDocumentPage(path: string): WikiRebuildResult["pages"][number] {
+  return {
+    path,
+    format: "document",
+    sections: [
+      {
+        heading: "Conclusion",
+        blocks: [
+          { type: "paragraph", text: "Own a complete learning loop." },
+          { type: "callout", text: "Records become useful when they change later action." },
+        ],
+      },
+      {
+        heading: "Decision",
+        blocks: [
+          { type: "subheading", text: "Measure outcomes" },
+          { type: "bullets", items: ["Record corrections.", "Connect them to results."] },
+          { type: "steps", items: ["Choose one task.", "Evaluate the result."] },
+          {
+            type: "table",
+            columns: ["Signal", "Meaning | action"],
+            rows: [["Correction", "Update the rule."]],
+          },
+          { type: "hypotheses", items: ["Test the learning loop before scaling."] },
+          {
+            type: "acceptedClaims",
+            claims: [
+              {
+                text: "A managed Wiki preserves reusable knowledge.",
+                sourceId: "karpathy-llm-wiki",
+              },
+            ],
+          },
+          { type: "links", slugs: ["llm-wiki"] },
+        ],
+      },
+    ],
   };
 }
 

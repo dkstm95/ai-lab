@@ -1,7 +1,7 @@
 # Wiki Shadow Rebuild
 
 Shadow rebuild measures whether the current Wiki can be reconstructed from managed evidence without
-changing live pages. Version 2 supports existing `source` and `concept` pages.
+changing live pages. Version 3 supports existing `source`, `concept`, and `synthesis` pages.
 
 ## Why It Is Separate
 
@@ -45,13 +45,13 @@ The host, not the model, selects targets:
 
 1. Resolve the requested IDs to managed files under `raw/sources`.
 2. Find existing pages whose metadata cites at least one selected source.
-3. Keep only `source` and `concept` pages.
+3. Keep only `source`, `concept`, and `synthesis` pages.
 4. Require at least one supported page and at most ten pages.
 5. Sort targets by path.
 
 The result must return every target exactly once. It cannot add a path, choose another kind, change
 metadata, or cite an unselected source. The candidate preserves existing status, including `review`
-and `conflicted`. Source-only and concept-only selections are valid.
+and `conflicted`. Any supported page-kind combination is valid.
 
 ## Task Binding
 
@@ -70,18 +70,12 @@ from the live Wiki and rejects any digest change as stale.
 
 ## Result Shape
 
-Each result page contains only:
+Evidence pages contain a host-selected path, summary, accepted claims, hypotheses, and Wiki links.
+Synthesis pages contain ordered sections built from validated paragraph, callout, list, subheading,
+table, accepted-claim, hypothesis, and link blocks.
 
-- its host-selected path;
-- a one-line plain-text summary;
-- one-line plain-text accepted claims with selected source IDs;
-- one-line source-derived hypotheses that still require project judgment;
-- allowed Wiki links.
-
-The host renders frontmatter and markdown. This keeps model output from selecting paths, status,
-timestamps, or raw source references directly. Summary and claim text cannot contain Wiki-link
-syntax; links must use the validated `links` field. Hypotheses render as typed claims under
-`Application Notes`; an empty list omits that section.
+The host renders frontmatter and Markdown. The model cannot select paths, metadata, raw source
+paths, or Markdown structure. Accepted claims use selected source IDs; links use allowed slugs.
 
 ## Report
 
@@ -127,13 +121,16 @@ The 2026-07-27 migration rehearsal used three independent managed source sets:
 - The Understanding AI-generated Code version 1 candidate was held because the old contract could
   not represent hypotheses. Version 2 restored that layer and passed semantic review. Digest:
   `6ca9ac987915e22af8c5d4705a83c7e419f867d47d359cdef77b3a79f60eaf65`.
+- The AI data-learning synthesis passed after version 3 replaced flattened evidence output with
+  typed document blocks and restored the data-team role as an explicit hypothesis. Digest:
+  `7ba0d3b78d4c99c3b3d7265e6d5d94ed3e1ff3e9b6269256544fb11cd764c200`.
 
 Every baseline and candidate lint report was clean. Shadow operations did not change target pages
 or `index.md`.
 
 ## Limitations
 
-- Version 2 does not rebuild synthesis, failure, decision, or other rich page kinds.
-- It renders a canonical summary, accepted claims, optional application hypotheses, and links.
-- Version 1 artifacts are rejected; regenerate them to bind the richer semantic contract.
+- Version 3 does not rebuild failure, decision, or other source-free reflection pages.
+- Source and concept pages use a canonical evidence layout; syntheses use typed document blocks.
+- Older artifacts are rejected; regenerate them to bind the current semantic contract.
 - It does not execute a model itself or expose `rebuild run`.

@@ -29,9 +29,9 @@ source IDs remain bound to selected evidence, and only an exact human-approved d
 CLI tests must not open a browser, call an API, or invoke a subscription tool.
 
 Shadow rebuild tests keep baseline pages hidden from task contexts, bind schema, index, source, and
-target hashes, accept source-only or concept-only target sets, compare candidates only in a
-temporary Wiki copy, preserve structured hypotheses, report claim, hypothesis, and section loss,
-and require an exact reviewed report before transactional promotion.
+target hashes, accept independent evidence pages and structured synthesis targets, compare
+candidates only in a temporary Wiki copy, preserve typed blocks and hypotheses, report claim,
+hypothesis, and section loss, and require an exact reviewed report before transactional promotion.
 
 External-runner tests verify strict envelopes, request binding, fatal UTF-8, byte and time limits,
 fresh environment construction, sensitive environment-name rejection, no-shell argument handling,

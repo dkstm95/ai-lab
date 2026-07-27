@@ -12,6 +12,11 @@ import {
   parseWikiAnswerTask,
 } from "./answer-exchange.js";
 import {
+  type WikiRebuildDocumentClaim,
+  documentClaims,
+  renderWikiRebuildDocument,
+} from "./rebuild-document.js";
+import {
   type WikiRebuildClaim,
   type WikiRebuildComparison,
   type WikiRebuildFile,
@@ -78,6 +83,12 @@ export type {
   WikiRebuildTarget,
   WikiRebuildTask,
 } from "./rebuild-exchange.js";
+export type {
+  WikiRebuildDocumentBlock,
+  WikiRebuildDocumentClaim,
+  WikiRebuildDocumentResultPage,
+  WikiRebuildDocumentSection,
+} from "./rebuild-document.js";
 
 export {
   WikiCandidateValidationError,
@@ -821,7 +832,7 @@ function rebuildTargets(
 
 function rebuildTargetPage(page: WikiPage, sources: ReadonlySet<string>): boolean {
   return (
-    (page.metadata.kind === "source" || page.metadata.kind === "concept") &&
+    ["source", "concept", "synthesis"].includes(page.metadata.kind) &&
     page.metadata.sources.some((source) => sources.has(source))
   );
 }
@@ -831,7 +842,7 @@ function rebuildTarget(workspace: Workspace, page: WikiPage): WikiRebuildTarget 
     path: relativeWikiPath(workspace, page.path),
     title: page.metadata.title,
     slug: page.metadata.slug,
-    kind: page.metadata.kind as "source" | "concept",
+    kind: page.metadata.kind as "source" | "concept" | "synthesis",
     status: page.metadata.status,
     createdAt: page.metadata.createdAt,
     baselineSha256: sha256(page.content),
@@ -843,7 +854,9 @@ function rebuildTarget(workspace: Workspace, page: WikiPage): WikiRebuildTarget 
 
 function assertRebuildTargetCoverage(targets: readonly WikiRebuildTarget[]): void {
   if (targets.length === 0 || targets.length > 10) {
-    throw new Error("Wiki rebuild v1 requires one to ten existing source or concept pages");
+    throw new Error(
+      "Wiki rebuild requires one to ten existing source, concept, or synthesis pages",
+    );
   }
 }
 
@@ -855,6 +868,9 @@ function rebuildInstructions(): string[] {
     "Do not turn a hypothesis into an accepted claim; return an empty hypotheses list when none are warranted.",
     "Write one concise summary, explicit typed claims, and useful Wiki links per target.",
     "Keep summary, claim, and hypothesis text to one line each; put Wiki links only in the links field.",
+    "For synthesis targets, use document sections and typed blocks instead of flattening the page into an evidence summary.",
+    "Use paragraph, callout, list, subheading, and table blocks for explanation; use acceptedClaims, hypotheses, and links blocks for typed knowledge.",
+    "Do not put Markdown syntax in block text because the host renders the document structure.",
     "Return every target exactly once in canonical path order.",
     ...writingConstraints(),
     "Keep one main idea per sentence and split sentences that are hard to understand in one pass.",
@@ -979,24 +995,38 @@ function rebuildCandidateFile(
 ): WikiRebuildFile {
   const target = task.targets.find((candidate) => candidate.path === page.path);
   if (target === undefined) throw new Error("Wiki rebuild result target is missing");
-  const claims = page.acceptedClaims.map((claim) => rebuildClaim(task, claim));
+  const claims = rebuildResultClaims(page).map((claim) => rebuildClaim(task, claim));
   const metadata = rebuildMetadata(task, target, claims);
   return {
     path: target.path,
-    content: renderWikiPage(
-      metadata,
-      rebuildBody(page.summary, claims, page.hypotheses, page.links),
-    ),
+    content: renderWikiPage(metadata, rebuildResultBody(task, page, claims)),
   };
 }
 
-function rebuildClaim(
+function rebuildResultClaims(
+  page: WikiRebuildResult["pages"][number],
+): readonly WikiRebuildDocumentClaim[] {
+  return page.format === "document" ? documentClaims(page) : page.acceptedClaims;
+}
+
+function rebuildResultBody(
   task: WikiRebuildTask,
-  claim: WikiRebuildResult["pages"][number]["acceptedClaims"][number],
-): WikiAcceptedClaim {
-  const source = task.evidence.find((candidate) => candidate.id === claim.sourceId);
+  page: WikiRebuildResult["pages"][number],
+  claims: readonly WikiAcceptedClaim[],
+): string {
+  return page.format === "document"
+    ? renderWikiRebuildDocument(page, (sourceId) => rebuildSourcePath(task, sourceId))
+    : rebuildBody(page.summary, claims, page.hypotheses, page.links);
+}
+
+function rebuildClaim(task: WikiRebuildTask, claim: WikiRebuildDocumentClaim): WikiAcceptedClaim {
+  return { text: claim.text, source: rebuildSourcePath(task, claim.sourceId) };
+}
+
+function rebuildSourcePath(task: WikiRebuildTask, sourceId: string): string {
+  const source = task.evidence.find((candidate) => candidate.id === sourceId);
   if (source === undefined) throw new Error("Wiki rebuild result cites an unknown source id");
-  return { text: claim.text, source: source.path };
+  return source.path;
 }
 
 function rebuildMetadata(
