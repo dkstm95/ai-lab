@@ -337,9 +337,22 @@ function taskConstraints(): string[] {
   return [
     "Do not invent accepted claims without sources.",
     "Keep hypotheses distinct from accepted facts.",
+    ...writingConstraints(),
+    "Keep one main idea per sentence and split sentences that are hard to understand in one pass.",
     "Prefer small markdown updates with explicit links.",
     "Preserve raw sources as immutable evidence.",
     "Keep index.md content-oriented and log.md chronological.",
+  ];
+}
+
+function writingConstraints(): string[] {
+  return [
+    "Avoid stale metaphors, similes, idioms, and stock phrases.",
+    "Prefer short, familiar words when they express the same meaning.",
+    "Remove every word that does not add meaning.",
+    "Prefer active voice when it makes the actor and action clearer.",
+    "Replace foreign phrases, scientific terms, and jargon with everyday language when possible; explain terms needed for precision.",
+    "Treat these as judgment rules, not rigid formulas; break one when following it would make the writing inaccurate, unclear, or unnatural.",
   ];
 }
 
@@ -1052,6 +1065,8 @@ function schemaPageRules(): string {
     "- Use typed claims: accepted, hypothesis, or conflicted.",
     "- Every accepted claim must include a following source line.",
     "- Keep each accepted claim distinct; do not duplicate the same claim/source pair across pages.",
+    ...writingConstraints().map((constraint) => `- ${constraint}`),
+    "- Keep one main idea per sentence. Split any sentence that is hard to understand in one pass.",
     "- Prefer wiki links like [[concept-slug]] for reusable concepts.",
   ].join("\n");
 }

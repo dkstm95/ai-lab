@@ -41,9 +41,15 @@ describe("wiki", () => {
     await expect(stat(join(workspace.root, "wiki", "raw", "sources"))).resolves.toBeDefined();
     await expect(stat(join(workspace.root, "wiki", "pages", "playbooks"))).resolves.toBeDefined();
     await expect(stat(join(workspace.root, "wiki", "pages", "questions"))).resolves.toBeDefined();
-    await expect(readFile(join(workspace.root, "wiki", "schema.md"), "utf8")).resolves.toContain(
-      "The LLM agent maintains this wiki",
-    );
+    const schema = await readFile(join(workspace.root, "wiki", "schema.md"), "utf8");
+    expect(schema).toContain("The LLM agent maintains this wiki");
+    expect(schema).toContain("Avoid stale metaphors");
+    expect(schema).toContain("Prefer short, familiar words");
+    expect(schema).toContain("Remove every word that does not add meaning");
+    expect(schema).toContain("Prefer active voice");
+    expect(schema).toContain("Replace foreign phrases");
+    expect(schema).toContain("Treat these as judgment rules");
+    expect(schema).toContain("Keep one main idea per sentence");
   });
 
   it("registers sources with deterministic ids and log entries", async () => {
@@ -76,6 +82,25 @@ describe("wiki", () => {
     expect(packet.expectedFiles).toContain(`pages/sources/${source.id}.md`);
     expect(packet.expectedFiles).toContain("pages/entities/*.md");
     expect(packet.constraints).toContain("Preserve raw sources as immutable evidence.");
+    expect(packet.constraints).toContain(
+      "Avoid stale metaphors, similes, idioms, and stock phrases.",
+    );
+    expect(packet.constraints).toContain(
+      "Prefer short, familiar words when they express the same meaning.",
+    );
+    expect(packet.constraints).toContain("Remove every word that does not add meaning.");
+    expect(packet.constraints).toContain(
+      "Prefer active voice when it makes the actor and action clearer.",
+    );
+    expect(packet.constraints).toContain(
+      "Replace foreign phrases, scientific terms, and jargon with everyday language when possible; explain terms needed for precision.",
+    );
+    expect(packet.constraints).toContain(
+      "Treat these as judgment rules, not rigid formulas; break one when following it would make the writing inaccurate, unclear, or unnatural.",
+    );
+    expect(packet.constraints).toContain(
+      "Keep one main idea per sentence and split sentences that are hard to understand in one pass.",
+    );
   });
 
   it("parses and renders wiki page metadata", () => {

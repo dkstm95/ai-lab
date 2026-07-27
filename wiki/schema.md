@@ -15,6 +15,13 @@ The LLM agent maintains this wiki. Humans curate sources, ask questions, and rev
 - Use typed claims: accepted, hypothesis, or conflicted.
 - Every accepted claim must include a following source line.
 - Keep each accepted claim distinct; do not duplicate the same claim/source pair across pages.
+- Avoid stale metaphors, similes, idioms, and stock phrases.
+- Prefer short, familiar words when they express the same meaning.
+- Remove every word that does not add meaning.
+- Prefer active voice when it makes the actor and action clearer.
+- Replace foreign phrases, scientific terms, and jargon with everyday language when possible. Explain terms needed for precision.
+- Treat these as judgment rules, not rigid formulas. Break one when following it would make the writing inaccurate, unclear, or unnatural.
+- Keep one main idea per sentence. Split any sentence that is hard to understand in one pass.
 - Prefer wiki links like [[concept-slug]] for reusable concepts.
 
 ## Ingest
