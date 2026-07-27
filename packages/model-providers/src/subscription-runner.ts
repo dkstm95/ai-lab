@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { realpathSync } from "node:fs";
+import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runSubscriptionRunnerCli } from "./subscription-runner/cli.js";
 
@@ -63,7 +64,9 @@ function publicError(error: unknown): string {
 function isDirectInvocation(): boolean {
   try {
     return (
-      process.argv[1] !== undefined && realpathSync(process.argv[1]) === realpathSync(adapterPath)
+      ["subscription-runner.js", "subscription-runner.ts"].includes(basename(adapterPath)) &&
+      process.argv[1] !== undefined &&
+      realpathSync(process.argv[1]) === realpathSync(adapterPath)
     );
   } catch {
     return false;

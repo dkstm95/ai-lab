@@ -19,6 +19,7 @@
 - 작업 회고, memory 후보, 승인 기반 자가진화 정책: `docs/self-evolution-guide.md`
 - 개인 맥락 기억 prototype의 목표, 비목표, 저장/검색/평가 기준: `docs/subbrain-design.md`
 - LLM Wiki 저장 구조, page schema, lint 규칙: `packages/wiki/src/index.ts`
+- 기존 Wiki page의 비파괴 재생성·비교: `docs/wiki-rebuild.md`
 
 ## 우선순위
 

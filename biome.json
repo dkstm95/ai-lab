@@ -1,7 +1,15 @@
 {
   "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
   "files": {
-    "ignore": ["build", "dist", "node_modules", "coverage", ".turbo", ".pnpm-store"]
+    "ignore": [
+      "build",
+      "dist",
+      "node_modules",
+      "coverage",
+      ".turbo",
+      ".pnpm-store",
+      ".ai-lab/wiki-exchange"
+    ]
   },
   "formatter": {
     "enabled": true,

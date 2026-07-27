@@ -8,6 +8,7 @@ import {
 import type { AgentRunRequest, AgentRunResult, ToolResult } from "@ai-lab/protocol";
 
 export { WikiAnswerWorkflow } from "./wiki-workflow.js";
+export { WikiRebuildWorkflow } from "./wiki-rebuild-workflow.js";
 export type {
   ApplyReviewedWikiProposalInput,
   WikiAnswerRunnerOptions,
@@ -18,7 +19,15 @@ export type {
   ExternalRunnerConfig,
   ExternalRunnerTrustedFile,
 } from "@ai-lab/model-providers";
-export type { WikiAnswerResult, WikiAnswerTask, WikiProposal } from "@ai-lab/wiki";
+export type {
+  PrepareWikiRebuildTaskInput,
+  WikiAnswerResult,
+  WikiAnswerTask,
+  WikiProposal,
+  WikiRebuildReport,
+  WikiRebuildResult,
+  WikiRebuildTask,
+} from "@ai-lab/wiki";
 
 export interface AgentRuntime {
   run(request: AgentRunRequest): Promise<AgentRunResult>;

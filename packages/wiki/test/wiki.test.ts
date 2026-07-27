@@ -17,6 +17,8 @@ import { buildWikiAnswerTask } from "../src/answer-exchange.js";
 import {
   type WikiAnswerTask,
   type WikiProposal,
+  type WikiRebuildResult,
+  type WikiRebuildTask,
   addWikiSource,
   applyWikiProposal,
   initWiki,
@@ -25,17 +27,25 @@ import {
   parseWikiAnswerResultForTask,
   parseWikiAnswerTask,
   parseWikiPage,
+  parseWikiRebuildReport,
+  parseWikiRebuildResult,
+  parseWikiRebuildResultForTask,
+  parseWikiRebuildTask,
   prepareWikiAnswerProposal,
   prepareWikiAnswerProposalFromTask,
   prepareWikiAnswerTask,
   prepareWikiEvolve,
   prepareWikiIngest,
   prepareWikiQuery,
+  prepareWikiRebuildReport,
+  prepareWikiRebuildTask,
   readWikiPage,
   recordWikiRun,
   renderWikiPage,
   validateCurrentWikiAnswerTask,
+  validateCurrentWikiRebuildTask,
 } from "../src/index.js";
+import { buildWikiRebuildReport, buildWikiRebuildTask } from "../src/rebuild-exchange.js";
 import { promoteWikiFiles } from "../src/transaction.js";
 
 const roots: string[] = [];
@@ -550,6 +560,363 @@ describe("wiki", () => {
     await expect(
       prepareWikiAnswerProposalFromTask(workspace, forged, answerTaskResult(forged), now()),
     ).rejects.toThrow();
+  });
+
+  it("prepares deterministic source-bound shadow rebuild tasks", async () => {
+    const workspace = await tempWorkspace();
+    await prepareRebuildWiki(workspace.root);
+    const before = await rebuildWikiState(workspace.root);
+
+    const task = await prepareWikiRebuildTask(workspace, rebuildTaskInput(), now());
+    const repeated = await prepareWikiRebuildTask(workspace, rebuildTaskInput(), now());
+
+    expect(task).toEqual(repeated);
+    expect(task.targets.map((target) => target.path)).toEqual([
+      "pages/concepts/llm-wiki.md",
+      "pages/sources/llm-wiki-source.md",
+    ]);
+    expect(task.contexts.map((context) => context.path)).toEqual([
+      "index.md",
+      "raw/sources/karpathy-llm-wiki.md",
+      "schema.md",
+    ]);
+    expect(task.prompt).not.toContain("Original concept summary.");
+    expect(task.prompt).not.toContain("Original source summary.");
+    await expect(validateCurrentWikiRebuildTask(workspace, task)).resolves.toEqual(task);
+    await expect(rebuildWikiState(workspace.root)).resolves.toEqual(before);
+  });
+
+  it("rejects unsupported rebuild target kinds in self-consistent tasks", async () => {
+    const workspace = await tempWorkspace();
+    await prepareRebuildWiki(workspace.root);
+    const task = await prepareWikiRebuildTask(workspace, rebuildTaskInput(), now());
+
+    expect(() =>
+      buildWikiRebuildTask({
+        generatedAt: task.generatedAt,
+        instructions: task.instructions,
+        contexts: task.contexts,
+        evidence: task.evidence,
+        targets: task.targets.map((target, index) =>
+          index === 0 ? { ...target, kind: "entity" as "concept" } : target,
+        ),
+        allowedLinks: task.allowedLinks,
+      }),
+    ).toThrow("target is invalid");
+  });
+
+  it("compares shadow rebuild candidates without changing the live wiki", async () => {
+    const workspace = await tempWorkspace();
+    await prepareRebuildWiki(workspace.root);
+    const task = await prepareWikiRebuildTask(workspace, rebuildTaskInput(), now());
+    const before = await rebuildWikiState(workspace.root);
+
+    const report = await prepareWikiRebuildReport(workspace, task, rebuildResult(task));
+    const concept = report.comparisons.find(
+      (comparison) => comparison.path === "pages/concepts/llm-wiki.md",
+    );
+
+    expect(report.baselineDiagnostics.issues).toEqual([]);
+    expect(report.candidateDiagnostics.issues).toEqual([]);
+    expect(report.introducedIssues).toEqual([]);
+    expect(concept).toMatchObject({
+      baselineClaimCount: 1,
+      candidateClaimCount: 1,
+      retainedClaimCount: 0,
+    });
+    expect(concept?.missingClaims[0]?.text).toBe("Original concept claim.");
+    expect(concept?.addedClaims[0]?.text).toBe("Rebuilt concept claim.");
+    expect(parseWikiRebuildReport(report)).toEqual(report);
+    const { id: _id, digest: _digest, ...reportCore } = report;
+    expect(() =>
+      buildWikiRebuildReport({
+        ...reportCore,
+        comparisons: report.comparisons.map((comparison, index) =>
+          index === 0
+            ? {
+                ...comparison,
+                missingSources: ["raw/sources/karpathy-llm-wiki.md"],
+              }
+            : comparison,
+        ),
+      }),
+    ).toThrow("missing sources");
+    await expect(rebuildWikiState(workspace.root)).resolves.toEqual(before);
+  });
+
+  it("keeps shadow rebuild diagnostics portable across workspace roots", async () => {
+    const first = await tempWorkspace();
+    const second = await tempWorkspace();
+    await Promise.all([prepareRebuildWiki(first.root), prepareRebuildWiki(second.root)]);
+    const [firstTask, secondTask] = await Promise.all([
+      prepareWikiRebuildTask(first, rebuildTaskInput(), now()),
+      prepareWikiRebuildTask(second, rebuildTaskInput(), now()),
+    ]);
+    const withoutConceptInboundLink = {
+      ...rebuildResult(firstTask),
+      pages: rebuildResult(firstTask).pages.map((page) =>
+        page.path === "pages/sources/llm-wiki-source.md" ? { ...page, links: [] } : page,
+      ),
+    };
+    const secondResult = {
+      ...withoutConceptInboundLink,
+      taskId: secondTask.id,
+      taskDigest: secondTask.digest,
+    };
+
+    const [firstReport, secondReport] = await Promise.all([
+      prepareWikiRebuildReport(first, firstTask, withoutConceptInboundLink),
+      prepareWikiRebuildReport(second, secondTask, secondResult),
+    ]);
+
+    expect(firstReport.introducedIssues).toEqual([
+      {
+        code: "orphan-page",
+        path: "pages/concepts/llm-wiki.md",
+        message: "Wiki page has no inbound links",
+      },
+    ]);
+    expect(
+      firstReport.comparisons.find(
+        (comparison) => comparison.path === "pages/sources/llm-wiki-source.md",
+      ),
+    ).toMatchObject({
+      baselineLinks: ["llm-wiki"],
+      candidateLinks: [],
+      missingLinks: ["llm-wiki"],
+      addedLinks: [],
+    });
+    expect(firstReport.digest).toBe(secondReport.digest);
+  });
+
+  it("compares duplicate baseline claims as a multiset", async () => {
+    const workspace = await tempWorkspace();
+    await prepareRebuildWiki(workspace.root);
+    const conceptPath = pagePath(workspace.root);
+    const concept = await readFile(conceptPath, "utf8");
+    const claim = [
+      "- accepted: Original concept claim.",
+      "  source: raw/sources/karpathy-llm-wiki.md",
+    ].join("\n");
+    const duplicateSource = [
+      "sources:",
+      "  - raw/sources/karpathy-llm-wiki.md",
+      "  - raw/sources/karpathy-llm-wiki.md",
+    ].join("\n");
+    await writeFile(
+      conceptPath,
+      concept
+        .replace("sources:\n  - raw/sources/karpathy-llm-wiki.md", duplicateSource)
+        .replace(claim, `${claim}\n${claim}`),
+      "utf8",
+    );
+    const task = await prepareWikiRebuildTask(workspace, rebuildTaskInput(), now());
+    const result = rebuildResult(task);
+    const withOneOriginalClaim = {
+      ...result,
+      pages: result.pages.map((page) =>
+        page.path === "pages/concepts/llm-wiki.md"
+          ? {
+              ...page,
+              acceptedClaims: [
+                {
+                  text: "Original concept claim.",
+                  sourceId: "karpathy-llm-wiki",
+                },
+              ],
+            }
+          : page,
+      ),
+    };
+
+    const report = await prepareWikiRebuildReport(workspace, task, withOneOriginalClaim);
+    const comparison = report.comparisons.find(
+      (candidate) => candidate.path === "pages/concepts/llm-wiki.md",
+    );
+
+    expect(comparison).toMatchObject({
+      baselineClaimCount: 2,
+      candidateClaimCount: 1,
+      retainedClaimCount: 1,
+    });
+    expect(comparison?.missingClaims).toEqual([
+      {
+        text: "Original concept claim.",
+        source: "raw/sources/karpathy-llm-wiki.md",
+      },
+    ]);
+    expect(comparison?.baselineSources).toEqual(["raw/sources/karpathy-llm-wiki.md"]);
+    expect(report.resolvedIssues.some((issue) => issue.code === "duplicate-accepted-claim")).toBe(
+      true,
+    );
+  });
+
+  it("preserves target status instead of claiming conflicts were resolved", async () => {
+    const workspace = await tempWorkspace();
+    await prepareRebuildWiki(workspace.root);
+    const conceptPath = pagePath(workspace.root);
+    const concept = await readFile(conceptPath, "utf8");
+    await writeFile(conceptPath, concept.replace("status: active", "status: conflicted"), "utf8");
+    const task = await prepareWikiRebuildTask(workspace, rebuildTaskInput(), now());
+
+    const report = await prepareWikiRebuildReport(workspace, task, rebuildResult(task));
+    const candidate = report.files.find((file) => file.path === "pages/concepts/llm-wiki.md");
+
+    expect(task.targets.find((target) => target.kind === "concept")?.status).toBe("conflicted");
+    expect(candidate?.content).toContain("\nstatus: conflicted\n");
+    expect(report.candidateDiagnostics.issues).toContainEqual({
+      code: "conflicted-page",
+      path: "pages/concepts/llm-wiki.md",
+      message: "Wiki page has unresolved conflicts",
+    });
+    expect(report.resolvedIssues).toEqual([]);
+  });
+
+  it("rejects rebuild text that bypasses structured claims or links", async () => {
+    const workspace = await tempWorkspace();
+    await prepareRebuildWiki(workspace.root);
+    const task = await prepareWikiRebuildTask(workspace, rebuildTaskInput(), now());
+    const result = rebuildResult(task);
+    const injectedClaim = {
+      ...result,
+      pages: result.pages.map((page, index) =>
+        index === 0
+          ? {
+              ...page,
+              summary:
+                "Summary.\n\n## Key Claims\n\n- accepted: Injected claim.\n  source: raw/sources/not-selected.md",
+            }
+          : page,
+      ),
+    };
+    const injectedLink = {
+      ...result,
+      pages: result.pages.map((page, index) =>
+        index === 0
+          ? {
+              ...page,
+              acceptedClaims: [
+                {
+                  text: "Structured claim with [[unreviewed-link]].",
+                  sourceId: "karpathy-llm-wiki",
+                },
+              ],
+            }
+          : page,
+      ),
+    };
+
+    expect(() => parseWikiRebuildResultForTask(task, injectedClaim)).toThrow();
+    expect(() => parseWikiRebuildResultForTask(task, injectedLink)).toThrow();
+  });
+
+  it("strictly rejects malformed rebuild task, result, and report artifacts", async () => {
+    const workspace = await tempWorkspace();
+    await prepareRebuildWiki(workspace.root);
+    const task = await prepareWikiRebuildTask(workspace, rebuildTaskInput(), now());
+    const result = rebuildResult(task);
+    const report = await prepareWikiRebuildReport(workspace, task, result);
+    const firstTarget = task.targets[0];
+    const firstEvidence = task.evidence[0];
+    const firstClaim = result.pages[0]?.acceptedClaims[0];
+    if (firstTarget === undefined || firstEvidence === undefined || firstClaim === undefined) {
+      throw new Error("Expected rebuild fixtures");
+    }
+    const invalidArtifacts = [
+      () => parseWikiRebuildTask({ ...task, schemaVersion: "invalid" }),
+      () =>
+        parseWikiRebuildTask({
+          ...task,
+          contexts: task.contexts.map((context, index) =>
+            index === 0 ? { ...context, sha256: "0".repeat(64) } : context,
+          ),
+        }),
+      () =>
+        parseWikiRebuildTask({
+          ...task,
+          evidence: [{ ...firstEvidence, path: "../outside.md" }],
+        }),
+      () =>
+        parseWikiRebuildTask({
+          ...task,
+          targets: task.targets.map((target, index) =>
+            index === 0 ? { ...target, reviewAfter: "not-a-date" } : target,
+          ),
+        }),
+      () =>
+        parseWikiRebuildTask({
+          ...task,
+          allowedLinks: task.allowedLinks.filter((link) => link !== firstTarget.slug),
+        }),
+      () => parseWikiRebuildTask({ ...task, id: `wiki-rebuild-${"0".repeat(64)}` }),
+      () => parseWikiRebuildResult(null),
+      () => parseWikiRebuildResult({ ...result, unexpected: true }),
+      () => parseWikiRebuildResultForTask(task, { ...result, taskId: "wrong-task" }),
+      () => parseWikiRebuildResultForTask(task, { ...result, pages: result.pages.slice(1) }),
+      () =>
+        parseWikiRebuildResultForTask(task, {
+          ...result,
+          pages: result.pages.map((page, index) =>
+            index === 0 ? { ...page, acceptedClaims: [firstClaim, firstClaim] } : page,
+          ),
+        }),
+      () =>
+        parseWikiRebuildResultForTask(task, {
+          ...result,
+          pages: result.pages.map((page, index) =>
+            index === 0 ? { ...page, links: [firstTarget.slug] } : page,
+          ),
+        }),
+      () =>
+        parseWikiRebuildReport({
+          ...report,
+          comparisons: report.comparisons.map((comparison, index) =>
+            index === 0 ? { ...comparison, baselineClaimCount: -1 } : comparison,
+          ),
+        }),
+      () => parseWikiRebuildReport({ ...report, comparisons: report.comparisons.slice(1) }),
+      () =>
+        parseWikiRebuildReport({
+          ...report,
+          baselineDiagnostics: {
+            issues: [{ code: "", path: "schema.md", message: "invalid" }],
+          },
+        }),
+    ];
+
+    for (const parse of invalidArtifacts) expect(parse).toThrow();
+  });
+
+  it("rejects stale or incorrectly bound shadow rebuild artifacts", async () => {
+    const workspace = await tempWorkspace();
+    await prepareRebuildWiki(workspace.root);
+    const task = await prepareWikiRebuildTask(workspace, rebuildTaskInput(), now());
+    const result = rebuildResult(task);
+
+    expect(parseWikiRebuildResultForTask(task, result)).toEqual(result);
+    expect(() =>
+      parseWikiRebuildResultForTask(task, {
+        ...result,
+        pages: [...result.pages, result.pages[0]],
+      }),
+    ).toThrow();
+    expect(() =>
+      parseWikiRebuildResultForTask(task, {
+        ...result,
+        pages: result.pages.map((page, index) =>
+          index === 0
+            ? {
+                ...page,
+                acceptedClaims: [{ text: "Claim.", sourceId: "unknown" }],
+              }
+            : page,
+        ),
+      }),
+    ).toThrow("unknown source");
+
+    await writeFile(rawSourcePath(workspace.root), "# Changed source\n", "utf8");
+    await expect(prepareWikiRebuildReport(workspace, task, result)).rejects.toThrow("stale");
+    await expect(stat(join(workspace.root, "wiki", "pages", "questions"))).resolves.toBeDefined();
   });
 
   it("prepares deterministic answer proposals without changing the live wiki", async () => {
@@ -1151,6 +1518,80 @@ function answerTaskResult(task: WikiAnswerTask) {
   };
 }
 
+function rebuildTaskInput() {
+  return { sourceIds: ["karpathy-llm-wiki"] };
+}
+
+function rebuildResult(task: WikiRebuildTask): WikiRebuildResult {
+  return {
+    schemaVersion: "ai-lab.wiki-rebuild-result.v1",
+    taskId: task.id,
+    taskDigest: task.digest,
+    pages: task.targets.map((target) => ({
+      path: target.path,
+      summary: target.kind === "concept" ? "Rebuilt concept summary." : "Original source summary.",
+      acceptedClaims: [
+        {
+          text: target.kind === "concept" ? "Rebuilt concept claim." : "Original source claim.",
+          sourceId: "karpathy-llm-wiki",
+        },
+      ],
+      links: [target.kind === "concept" ? "llm-wiki-source" : "llm-wiki"],
+    })),
+  };
+}
+
+async function prepareRebuildWiki(root: string): Promise<void> {
+  await initWiki(createWorkspace(root));
+  await writeRawSource(root);
+  await writeFile(
+    pagePath(root),
+    renderWikiPage(metadata(), rebuildBody("Original concept summary.", "Original concept claim.")),
+  );
+  await writeFile(
+    rebuildSourcePagePath(root),
+    renderWikiPage(
+      rebuildSourceMetadata(),
+      rebuildBody("Original source summary.", "Original source claim."),
+    ),
+  );
+  await writeFile(join(root, "wiki", "index.md"), rebuildIndex(), "utf8");
+}
+
+function rebuildSourceMetadata() {
+  return {
+    ...metadata(),
+    title: "LLM Wiki Source",
+    slug: "llm-wiki-source",
+    kind: "source" as const,
+  };
+}
+
+function rebuildBody(summary: string, claim: string): string {
+  const link = summary.includes("concept") ? "llm-wiki-source" : "llm-wiki";
+  return `## Summary\n\n${summary}\n\n## Key Claims\n\n- accepted: ${claim}\n  source: raw/sources/karpathy-llm-wiki.md\n\n## Links\n\n- [[${link}]]\n`;
+}
+
+function rebuildIndex(): string {
+  return [
+    "# Wiki Index",
+    "",
+    "- [LLM Wiki](pages/concepts/llm-wiki.md)",
+    "- [LLM Wiki Source](pages/sources/llm-wiki-source.md)",
+    "",
+  ].join("\n");
+}
+
+async function rebuildWikiState(root: string) {
+  return {
+    concept: await readFile(pagePath(root), "utf8"),
+    sourcePage: await readFile(rebuildSourcePagePath(root), "utf8"),
+    index: await readFile(join(root, "wiki", "index.md"), "utf8"),
+    log: await readFile(join(root, "wiki", "log.md"), "utf8"),
+    source: await readFile(rawSourcePath(root), "utf8"),
+  };
+}
+
 function approval(proposal: WikiProposal, reviewedAt = "2026-06-17T12:30:00.000Z") {
   return {
     proposalId: proposal.id,
@@ -1234,6 +1675,10 @@ function questionPath(root: string): string {
 
 function sourcePagePath(root: string): string {
   return join(root, "wiki", "pages", "sources", "llm-wiki.md");
+}
+
+function rebuildSourcePagePath(root: string): string {
+  return join(root, "wiki", "pages", "sources", "llm-wiki-source.md");
 }
 
 function questionRelativePath(): string {

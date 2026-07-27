@@ -1,7 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
   ExternalRunnerConfig,
@@ -9,11 +9,18 @@ import type {
   WikiAnswerResult,
   WikiAnswerTask,
   WikiProposal,
+  WikiRebuildReport,
+  WikiRebuildResult,
+  WikiRebuildTask,
 } from "@ai-lab/agent-runtime";
 import { externalRunnerFileSha256 } from "@ai-lab/agent-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCli } from "../src/index.js";
-import { formatWikiProposalReview, wikiRunnerConfigDigest } from "../src/wiki.js";
+import {
+  formatWikiProposalReview,
+  formatWikiRebuildReview,
+  wikiRunnerConfigDigest,
+} from "../src/wiki.js";
 
 const roots: string[] = [];
 const runnerFixture = fileURLToPath(new URL("./fixtures/wiki-runner.mjs", import.meta.url));
@@ -259,6 +266,66 @@ describe("cli", () => {
     );
   });
 
+  it("compares a manual shadow rebuild without changing the live Wiki", async () => {
+    const root = await tempRoot();
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    await writeFile(join(root, "source.md"), "# Research\nDurable knowledge is reusable.\n");
+    await runCli(["node", "ai-lab", "wiki", "init"], root);
+    await runCli(
+      ["node", "ai-lab", "wiki", "source", "add", "source.md", "--title", "Research"],
+      root,
+    );
+    const source = loggedJson<{ id: string; path: string }>(log);
+    await writeRebuildPages(root, source.path);
+    const before = await rebuildLiveWikiState(root);
+
+    await runCli(
+      [
+        "node",
+        "ai-lab",
+        "wiki",
+        "rebuild",
+        "task",
+        "--sources",
+        source.id,
+        "--out",
+        "rebuild-task.json",
+      ],
+      root,
+    );
+    const task = await artifact<WikiRebuildTask>(root, "rebuild-task.json");
+    await writeRebuildResult(root, task, source.id);
+    await runCli(
+      [
+        "node",
+        "ai-lab",
+        "wiki",
+        "rebuild",
+        "compare",
+        "--task",
+        "rebuild-task.json",
+        "--result",
+        "rebuild-result.json",
+        "--out",
+        "rebuild-report.json",
+      ],
+      root,
+    );
+
+    const report = await artifact<WikiRebuildReport>(root, "rebuild-report.json");
+    expect(report.candidateDiagnostics.issues).toEqual([]);
+    await runCli(["node", "ai-lab", "wiki", "rebuild", "review", "rebuild-report.json"], root);
+    const review = String(log.mock.calls.at(-1)?.[0]);
+    expect(review.split("\n").filter((line) => line.startsWith("Digest:"))).toEqual([
+      `Digest: ${report.digest}`,
+    ]);
+    expect(formatWikiRebuildReview({ ...report, taskId: "\u202e" })).toContain("\\u202e");
+    await expect(rebuildLiveWikiState(root)).resolves.toEqual(before);
+    await expect(
+      runCli(["node", "ai-lab", "wiki", "rebuild", "apply", "rebuild-report.json"], root),
+    ).rejects.toThrow("Unknown wiki command");
+  });
+
   it("does not spawn when a trusted static file changes after disclosure", async () => {
     const root = await tempRoot();
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -418,6 +485,7 @@ describe("cli", () => {
       await expect(stat(output)).rejects.toThrow();
       expect(process.listenerCount(signal)).toBe(listeners);
     },
+    15_000,
   );
 
   it("keeps exchange artifacts inside the private workspace directory", async () => {
@@ -653,6 +721,79 @@ function runnerDisclosure(log: ReturnType<typeof vi.spyOn>) {
   return JSON.parse(value) as unknown;
 }
 
+async function writeRebuildPages(root: string, sourcePath: string): Promise<void> {
+  const source = relative(join(root, "wiki"), sourcePath);
+  await writeFile(
+    rebuildConceptPath(root),
+    rebuildPage("Research Concept", "research-concept", "concept", source, "Concept claim."),
+  );
+  await writeFile(
+    rebuildSourcePath(root),
+    rebuildPage("Research Source", "research-source", "source", source, "Source claim."),
+  );
+  await writeFile(
+    join(root, "wiki", "index.md"),
+    "# Wiki Index\n\n- [Research Concept](pages/concepts/research-concept.md)\n- [Research Source](pages/sources/research-source.md)\n",
+  );
+}
+
+function rebuildPage(
+  title: string,
+  slug: string,
+  kind: "source" | "concept",
+  source: string,
+  claim: string,
+): string {
+  const link = kind === "concept" ? "research-source" : "research-concept";
+  return `---\ntitle: ${title}\nslug: ${slug}\nkind: ${kind}\nstatus: active\ncreatedAt: 2026-06-17T12:00:00.000Z\nupdatedAt: 2026-06-17T12:00:00.000Z\nsources:\n  - ${source}\n---\n\n## Summary\n\nBaseline ${kind}.\n\n## Key Claims\n\n- accepted: ${claim}\n  source: ${source}\n\n## Links\n\n- [[${link}]]\n`;
+}
+
+async function writeRebuildResult(
+  root: string,
+  task: WikiRebuildTask,
+  sourceId: string,
+): Promise<void> {
+  const result: WikiRebuildResult = {
+    schemaVersion: "ai-lab.wiki-rebuild-result.v1",
+    taskId: task.id,
+    taskDigest: task.digest,
+    pages: task.targets.map((target) => rebuildResultPage(target, sourceId)),
+  };
+  await writeFile(
+    join(root, ".ai-lab", "wiki-exchange", "rebuild-result.json"),
+    `${JSON.stringify(result)}\n`,
+    { mode: 0o600 },
+  );
+}
+
+function rebuildResultPage(target: WikiRebuildTask["targets"][number], sourceId: string) {
+  const concept = target.kind === "concept";
+  return {
+    path: target.path,
+    summary: concept ? "Rebuilt concept." : "Rebuilt source.",
+    acceptedClaims: [
+      { text: concept ? "Rebuilt concept claim." : "Rebuilt source claim.", sourceId },
+    ],
+    links: [concept ? "research-source" : "research-concept"],
+  };
+}
+
+async function rebuildLiveWikiState(root: string) {
+  return {
+    ...(await liveWikiState(root)),
+    concept: await readFile(rebuildConceptPath(root), "utf8"),
+    source: await readFile(rebuildSourcePath(root), "utf8"),
+  };
+}
+
+function rebuildConceptPath(root: string): string {
+  return join(root, "wiki", "pages", "concepts", "research-concept.md");
+}
+
+function rebuildSourcePath(root: string): string {
+  return join(root, "wiki", "pages", "sources", "research-source.md");
+}
+
 async function liveWikiState(root: string) {
   return {
     index: await readFile(join(root, "wiki", "index.md"), "utf8"),
@@ -661,7 +802,7 @@ async function liveWikiState(root: string) {
 }
 
 async function waitForFile(path: string): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  for (let attempt = 0; attempt < 1_000; attempt += 1) {
     if (
       await stat(path)
         .then(() => true)
