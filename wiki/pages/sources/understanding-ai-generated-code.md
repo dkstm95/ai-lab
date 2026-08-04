@@ -4,7 +4,7 @@ slug: understanding-ai-generated-code
 kind: source
 status: active
 createdAt: 2026-07-16T14:48:48.000Z
-updatedAt: 2026-07-27T08:15:35.000Z
+updatedAt: 2026-07-28T08:59:54.000Z
 reviewAfter: 2027-01-16T00:00:00.000Z
 sources:
   - raw/sources/understanding-ai-generated-code.md
@@ -42,3 +42,5 @@ Geoffrey Litt argues that AI-generated code can outpace the human understanding 
 - hypothesis: Keep generated teaching material temporary unless it captures stable shared context that the team needs to maintain.
 
 ## Links
+
+- [[human-steering-coding-workflow]]
