@@ -37,3 +37,5 @@
 ## [2026-07-27T08:21:39.398Z] rebuild | wiki-rebuild-report-6ca9ac987915e22af8c5d4705a83c7e419f867d47d359cdef77b3a79f60eaf65 | digest=6ca9ac987915e22af8c5d4705a83c7e419f867d47d359cdef77b3a79f60eaf65 | reviewer=SeungIl | reviewedAt=2026-07-27T08:21:39.398Z
 
 ## [2026-07-27T08:50:20.618Z] rebuild | wiki-rebuild-report-7ba0d3b78d4c99c3b3d7265e6d5d94ed3e1ff3e9b6269256544fb11cd764c200 | digest=7ba0d3b78d4c99c3b3d7265e6d5d94ed3e1ff3e9b6269256544fb11cd764c200 | reviewer=SeungIl | reviewedAt=2026-07-27T08:50:20.618Z
+
+## [2026-08-04T01:46:45.604Z] source | Boris Cherny: Building Claude Code | boris-cherny-building-claude-code-0856ef24c3ab671a6aae545a11b7b91e

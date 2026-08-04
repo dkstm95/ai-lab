@@ -113,22 +113,55 @@
       "id": "ai-code-cognitive-debt",
       "query": "What is cognitive debt in AI-generated code?",
       "expectedPages": ["pages/sources/understanding-ai-generated-code.md"],
-      "allowedPages": ["pages/sources/understanding-ai-generated-code.md"],
+      "allowedPages": [
+        "pages/sources/understanding-ai-generated-code.md",
+        "pages/syntheses/human-steering-ai-generated-code.md"
+      ],
       "expectedSources": ["raw/sources/understanding-ai-generated-code.md"]
     },
     {
       "id": "ai-code-active-questions",
       "query": "How can quizzes test understanding of agent-written code?",
       "expectedPages": ["pages/sources/understanding-ai-generated-code.md"],
-      "allowedPages": ["pages/sources/understanding-ai-generated-code.md"],
+      "allowedPages": [
+        "pages/sources/understanding-ai-generated-code.md",
+        "pages/syntheses/human-steering-ai-generated-code.md"
+      ],
       "expectedSources": ["raw/sources/understanding-ai-generated-code.md"]
     },
     {
       "id": "ai-code-microworlds",
       "query": "What are interactive microworlds useful for?",
       "expectedPages": ["pages/sources/understanding-ai-generated-code.md"],
-      "allowedPages": ["pages/sources/understanding-ai-generated-code.md"],
+      "allowedPages": [
+        "pages/sources/understanding-ai-generated-code.md",
+        "pages/syntheses/human-steering-ai-generated-code.md"
+      ],
       "expectedSources": ["raw/sources/understanding-ai-generated-code.md"]
+    },
+    {
+      "id": "ai-code-human-steering-lifecycle",
+      "query": "인지 부채와 수직 단위 구현을 함께 관리하려면?",
+      "expectedPages": ["pages/syntheses/human-steering-ai-generated-code.md"],
+      "allowedPages": [
+        "pages/sources/understanding-ai-generated-code.md",
+        "pages/sources/why-software-factories-fail.md",
+        "pages/syntheses/human-steering-ai-generated-code.md"
+      ],
+      "expectedSources": [
+        "raw/sources/understanding-ai-generated-code.md",
+        "raw/sources/why-software-factories-fail.md"
+      ]
+    },
+    {
+      "id": "ai-code-upfront-program-design",
+      "query": "Dex Horthy maintainability program design vertical slices",
+      "expectedPages": ["pages/sources/why-software-factories-fail.md"],
+      "allowedPages": [
+        "pages/sources/why-software-factories-fail.md",
+        "pages/syntheses/human-steering-ai-generated-code.md"
+      ],
+      "expectedSources": ["raw/sources/why-software-factories-fail.md"]
     },
     {
       "id": "ai-data-moat",
