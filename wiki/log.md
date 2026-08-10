@@ -41,3 +41,5 @@
 ## [2026-08-10T12:34:01.892Z] source | How The Fastest AI-First Companies Really Work | how-the-fastest-ai-first-companies-really-work-2c0c8f9e2e01ac1425c51d3382caf351
 
 ## [2026-08-10T12:41:00.258Z] source | 10 GUI Design Elements Build Every User Interface | 10-gui-design-elements-build-every-user-interface-96ea0ce7152b058657752ae436d75b35
+
+## [2026-08-10T12:44:00.460Z] source | Harness Engineering for Self-Improvement | harness-engineering-for-self-improvement-45bc3793c36e42f79749f84af5107617
