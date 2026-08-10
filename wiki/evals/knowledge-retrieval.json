@@ -170,6 +170,18 @@
       ]
     },
     {
+      "id": "ai-first-mission-pod-operation",
+      "query": "mission pod responsibility map",
+      "expectedPages": ["pages/concepts/ai-first-mission-pod-operating-model.md"],
+      "allowedPages": [
+        "pages/concepts/ai-first-mission-pod-operating-model.md",
+        "pages/sources/how-the-fastest-ai-first-companies-really-work.md"
+      ],
+      "expectedSources": [
+        "raw/sources/how-the-fastest-ai-first-companies-really-work-2c0c8f9e2e01ac1425c51d3382caf351.md"
+      ]
+    },
+    {
       "id": "abstain-weather",
       "query": "이번 주 서울 날씨는?",
       "expectedPages": [],
