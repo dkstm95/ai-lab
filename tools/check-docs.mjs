@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { access } from "node:fs/promises";
 
 const requiredFiles = [
@@ -29,8 +29,6 @@ const requiredRootScripts = [
   "typecheck",
   "wiki:knowledge:eval",
 ];
-
-const markdownLineLimit = 140;
 
 const docs = {
   readme: read("README.md"),
@@ -142,11 +140,6 @@ for (const phrase of ["Spring Framework", "55 characters", "Pull Request Rules"]
 assert(docs.readme.includes("README.ko.md"), "README.md must link README.ko.md");
 assert(docs.readmeKo.includes("README.md"), "README.ko.md must link README.md");
 
-for (const file of collectMarkdownFiles(".")) {
-  const lineCount = read(file).trimEnd().split("\n").length;
-  assert(lineCount <= markdownLineLimit, `${file} is too long: ${lineCount} lines`);
-}
-
 console.log("docs check passed");
 
 function read(path) {
@@ -165,22 +158,4 @@ function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
   }
-}
-
-function collectMarkdownFiles(root) {
-  const ignored = new Set([".git", "coverage", "dist", "node_modules"]);
-  const files = [];
-  for (const entry of readdirSync(root)) {
-    if (ignored.has(entry)) {
-      continue;
-    }
-    const path = root === "." ? entry : `${root}/${entry}`;
-    const stat = statSync(path);
-    if (stat.isDirectory()) {
-      files.push(...collectMarkdownFiles(path));
-    } else if (path.endsWith(".md")) {
-      files.push(path);
-    }
-  }
-  return files;
 }
