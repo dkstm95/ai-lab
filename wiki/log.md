@@ -39,3 +39,5 @@
 ## [2026-07-27T08:50:20.618Z] rebuild | wiki-rebuild-report-7ba0d3b78d4c99c3b3d7265e6d5d94ed3e1ff3e9b6269256544fb11cd764c200 | digest=7ba0d3b78d4c99c3b3d7265e6d5d94ed3e1ff3e9b6269256544fb11cd764c200 | reviewer=SeungIl | reviewedAt=2026-07-27T08:50:20.618Z
 
 ## [2026-08-10T12:34:01.892Z] source | How The Fastest AI-First Companies Really Work | how-the-fastest-ai-first-companies-really-work-2c0c8f9e2e01ac1425c51d3382caf351
+
+## [2026-08-10T12:41:00.258Z] source | 10 GUI Design Elements Build Every User Interface | 10-gui-design-elements-build-every-user-interface-96ea0ce7152b058657752ae436d75b35

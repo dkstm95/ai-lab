@@ -182,6 +182,51 @@
       ]
     },
     {
+      "id": "gui-buttons-links-semantics",
+      "query": "GUI buttons actions links destinations",
+      "expectedPages": ["pages/sources/10-gui-design-elements-build-every-user-interface.md"],
+      "allowedPages": ["pages/sources/10-gui-design-elements-build-every-user-interface.md"],
+      "expectedSources": [
+        "raw/sources/10-gui-design-elements-build-every-user-interface-96ea0ce7152b058657752ae436d75b35.md"
+      ]
+    },
+    {
+      "id": "gui-widgets-overview",
+      "query": "GUI widgets",
+      "expectedPages": ["pages/sources/10-gui-design-elements-build-every-user-interface.md"],
+      "allowedPages": ["pages/sources/10-gui-design-elements-build-every-user-interface.md"],
+      "expectedSources": [
+        "raw/sources/10-gui-design-elements-build-every-user-interface-96ea0ce7152b058657752ae436d75b35.md"
+      ]
+    },
+    {
+      "id": "gui-widgets-korean",
+      "query": "GUI 위젯",
+      "expectedPages": ["pages/sources/10-gui-design-elements-build-every-user-interface.md"],
+      "allowedPages": ["pages/sources/10-gui-design-elements-build-every-user-interface.md"],
+      "expectedSources": [
+        "raw/sources/10-gui-design-elements-build-every-user-interface-96ea0ce7152b058657752ae436d75b35.md"
+      ]
+    },
+    {
+      "id": "gui-selection-controls",
+      "query": "checkboxes radio buttons toggles selection",
+      "expectedPages": ["pages/sources/10-gui-design-elements-build-every-user-interface.md"],
+      "allowedPages": ["pages/sources/10-gui-design-elements-build-every-user-interface.md"],
+      "expectedSources": [
+        "raw/sources/10-gui-design-elements-build-every-user-interface-96ea0ce7152b058657752ae436d75b35.md"
+      ]
+    },
+    {
+      "id": "gui-generative-interface-controls",
+      "query": "generative GUI pause undo",
+      "expectedPages": ["pages/sources/10-gui-design-elements-build-every-user-interface.md"],
+      "allowedPages": ["pages/sources/10-gui-design-elements-build-every-user-interface.md"],
+      "expectedSources": [
+        "raw/sources/10-gui-design-elements-build-every-user-interface-96ea0ce7152b058657752ae436d75b35.md"
+      ]
+    },
+    {
       "id": "abstain-weather",
       "query": "이번 주 서울 날씨는?",
       "expectedPages": [],

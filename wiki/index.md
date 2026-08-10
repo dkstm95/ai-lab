@@ -2,6 +2,7 @@
 
 ## Sources
 
+- [10 GUI Design Elements Build Every User Interface](pages/sources/10-gui-design-elements-build-every-user-interface.md) - source summary for familiar GUI control contracts, common failures, and generative interface implications.
 - [Advice for New Principal Tech ICs](pages/sources/advice-for-new-principal-tech-ics.md) - source summary for principal IC leverage, influence, and sustainable breadth work.
 - [How The Fastest AI-First Companies Really Work](pages/sources/how-the-fastest-ai-first-companies-really-work.md) - source summary for NFX's mission pod structure, operating rules, measures, and failure modes.
 - [Karpathy LLM Wiki](pages/sources/karpathy-llm-wiki.md) - source summary for the agent-maintained markdown wiki pattern and reliability comments.
