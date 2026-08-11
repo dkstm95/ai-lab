@@ -5,6 +5,7 @@
 - [10 GUI Design Elements Build Every User Interface](pages/sources/10-gui-design-elements-build-every-user-interface.md) - source summary for familiar GUI control contracts, common failures, and generative interface implications.
 - [Advice for New Principal Tech ICs](pages/sources/advice-for-new-principal-tech-ics.md) - source summary for principal IC leverage, influence, and sustainable breadth work.
 - [Boris Cherny: Building Claude Code](pages/sources/boris-cherny-building-claude-code.md) - source summary for model-specific harness ablation, product overhang, verification, and long-running agent workflows.
+- [Garry Tan: Own Your Intelligence](pages/sources/garry-tan-own-your-intelligence.md) - source summary for personal AGI, owned context and skill files, memory hygiene, and cognitive asset control.
 - [Harness Engineering for Self-Improvement](pages/sources/harness-engineering-for-self-improvement.md) - source survey of agent harness design, self-improvement methods, optimization loops, and control risks.
 - [How The Fastest AI-First Companies Really Work](pages/sources/how-the-fastest-ai-first-companies-really-work.md) - source summary for NFX's mission pod structure, operating rules, measures, and failure modes.
 - [Karpathy LLM Wiki](pages/sources/karpathy-llm-wiki.md) - source summary for the agent-maintained markdown wiki pattern and reliability comments.
