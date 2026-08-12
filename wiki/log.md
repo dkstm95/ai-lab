@@ -47,3 +47,5 @@
 ## [2026-08-10T12:44:00.460Z] source | Harness Engineering for Self-Improvement | harness-engineering-for-self-improvement-45bc3793c36e42f79749f84af5107617
 
 ## [2026-08-11T08:51:51.445Z] source | Garry Tan: Own Your Intelligence | garry-tan-own-your-intelligence-eea6b8a583a99fdf87f26f0278248d7b
+
+## [2026-08-12T05:52:12.055Z] source | Vaibhav Gupta: Fighting Slop with Slop | vaibhav-gupta-fighting-slop-with-slop-b8a1ada6dc66e9691a4241a4775dc697

@@ -10,6 +10,7 @@
 - [How The Fastest AI-First Companies Really Work](pages/sources/how-the-fastest-ai-first-companies-really-work.md) - source summary for NFX's mission pod structure, operating rules, measures, and failure modes.
 - [Karpathy LLM Wiki](pages/sources/karpathy-llm-wiki.md) - source summary for the agent-maintained markdown wiki pattern and reliability comments.
 - [Understanding AI-generated Code](pages/sources/understanding-ai-generated-code.md) - source summary for restoring human understanding after agent-authored changes.
+- [Vaibhav Gupta: Fighting Slop with Slop](pages/sources/vaibhav-gupta-fighting-slop-with-slop.md) - source summary for invariant-driven architecture, readable design records, agent evaluation, and agent-first language design.
 - [Why Software Factories Fail](pages/sources/why-software-factories-fail.md) - source summary for keeping human judgment in planning, program design, incremental implementation, and code review.
 
 ## Concepts
