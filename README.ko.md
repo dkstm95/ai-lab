@@ -1,140 +1,36 @@
 # ai-lab
 
-AI 아이디어를 직접 구현하고 테스트하기 위한 TypeScript-first 개인 실험실이다.
+[English README](README.md)
 
-English guide: `README.md`
+AI 아이디어를 직접 구현하고 시험하는 개인 실험 공간이다. 현재 LLM Wiki와 SubBrain이
+들어 있다.
 
-이 저장소는 특정 실험 하나를 위한 프로젝트가 아니다. CLI, 로컬 HTTP 서비스, 모델 provider routing, agent 실행 흐름, workspace 파일 관리, local tool을 작게 갖춘 monorepo 기반을 제공한다. 실제 API provider와 구독 기반 외부 runner는 기본 검증 경로에서 제외하고, fake provider로 재현 가능한 smoke/test 흐름을 유지한다.
+## LLM Wiki
 
-## 빠른 실행
+**상태: 개발 중**
 
-```bash
-pnpm install
-pnpm check
-pnpm cli --help
-pnpm cli run hello "hello"
-pnpm coverage
-```
+LLM Wiki는 참고 자료의 원문과 이를 바탕으로 정리한 글을 내 컴퓨터에 보관하는 지식
+저장소다. 정리한 글은 사람이 직접 읽고 고칠 수 있는 Markdown 파일로 저장한다.
 
-로컬 서비스를 실행한다.
+다음 기능을 제공한다.
 
-```bash
-pnpm service:dev
-```
+- 원문을 복사해 보존한다.
+- 원문 요약, 개념 정리, 여러 자료를 묶은 글을 저장한다.
+- 질문과 관련된 문서를 찾는다.
+- AI에게 작업을 맡길 때 관련 원문을 함께 제공해, 답변의 근거를 확인할 수 있게 한다.
+- AI가 만든 글은 초안으로 보관하고, 사람이 검토해 승인한 뒤 Wiki에 반영한다.
 
-기본 endpoint:
+## SubBrain
 
-- `GET /health`
-- `POST /agent/hello`
-- `GET /subbrain`
+**상태: 개발 보류**
 
-`/subbrain`은 로컬 prototype page다. 내부 JSON route는 데모 helper이며
-안정적인 product API가 아니다.
+SubBrain은 내 컴퓨터에서 실행하는 실험용 도구다.
 
-## 구조
+다음 기능이 있다.
 
-```text
-apps/cli                 터미널 진입점
-apps/service             Hono 기반 로컬 HTTP 서비스
-packages/protocol        패키지 간 통신 규약과 schema
-packages/config          환경 설정과 모델 profile 설정
-packages/model-providers provider adapter와 routing
-packages/agent-runtime   모델/tool 실행 흐름
-packages/workspace       workspace root와 path helper
-packages/wiki            local markdown LLM Wiki workspace
-packages/subbrain        개인 사건 기억 prototype
-packages/local-tools     agent runtime이 호출할 수 있는 local tool
-docs/                    설계, 개발, 테스트 가이드
-```
+- 사용자가 직접 남긴 기록을 사건별로 정리해 내 컴퓨터에 저장한다.
+- 새 질문과 관련된 과거 기록을 찾는다.
+- 어떤 기록이 연결 가능성의 근거인지와 무엇이 불확실한지 보여주되, 그 연결 가능성을 확정된
+  원인으로 단정하지 않는다.
 
-## LLM Wiki 흐름
-
-LLM Wiki는 관리 영역에 복사한 source와 사람이 읽을 수 있는 재사용 markdown 지식을
-저장한다. 답변 흐름은 모델 API를 호출하지 않으며 한 AI 업체에 의존하지 않는다.
-
-```bash
-pnpm cli wiki init
-pnpm cli wiki source add notes.md --title "조사 노트"
-pnpm cli wiki knowledge retrieve "무엇이 지속 가능한 경쟁 우위를 만드는가?"
-pnpm cli wiki knowledge evaluate
-pnpm cli wiki answer task "무엇이 지속 가능한 경쟁 우위를 만드는가?" --out task.json
-
-# .ai-lab/wiki-exchange/task.json의 prompt를 원하는 AI에 전달한다.
-# AI가 반환한 JSON을 .ai-lab/wiki-exchange/result.json으로 저장한다.
-
-# 또는 감사한 wrapper로 result.json을 만든다. 첫 실행은 정확한 runner
-# manifest를 공개하며 두 digest가 일치하지 않으면 실행하지 않는다.
-pnpm cli wiki answer run \
-  --task task.json --out result.json \
-  --runner-id my-wrapper \
-  --runner-executable /absolute/path/to/my-wrapper \
-  --runner-args-json '[]' \
-  --runner-trusted-files-json '[]' \
-  --accept-task-digest "<전체-task-digest>" \
-  --trust-runner my-wrapper \
-  --accept-runner-digest "<공개된-전체-runner-digest>"
-
-pnpm cli wiki answer propose \
-  --task task.json --result result.json --out proposal.json
-pnpm cli wiki answer review proposal.json
-pnpm cli wiki answer apply proposal.json \
-  --reviewer "<이름>" --accept-digest "<검토한-전체-digest>"
-```
-
-answer task는 최대 5개의 active 지식 page를 검색하고 그 page가 가리키는 raw source를
-인용 가능한 근거로 묶는다. `--sources <source-id>`는 선택 사항이며 근거를 추가한다.
-task에는 Wiki schema와 index도 들어간다.
-구독형 서비스나 다른 모델에 전달하기 전에 공개 내용을 확인해야 한다. 같은 엄격한 result
-규약을 웹 구독, 로컬 모델, 신뢰된 runner wrapper가 공유한다. task와 proposal 생성은 실제
-Wiki page를 바꾸지 않는다. host의 runner 흐름은 result artifact만 만들며 proposal과
-apply는 별도 명령으로 남는다.
-
-외부 runner는 ai-lab의 stdin/stdout envelope를 구현해야 한다. 공식 AI CLI가 이 규약을
-직접 구현한다고 가정하면 안 된다. provider adapter는 해당 CLI와 별도 로그인을 감싸는
-감사된 wrapper다. ai-lab은 API key를 요구하지 않지만, wrapper가 구독 또는 API 과금 중
-어느 경로를 사용했는지 증명하지도 못한다.
-
-저장소에는 정확한 버전을 고정한 Codex와 Claude 구독 CLI profile이 포함된다. ai-lab에
-API key를 주지 않고 별도로 로그인한 계정을 사용한다. 설정법, 지원 버전, 중요한 한계는
-`docs/subscription-runner.md`에 정리되어 있다.
-
-wrapper는 sandbox가 아니라 같은 사용자 권한으로 실행되는 신뢰된 프로그램이다. 따라서
-사용자의 파일, credential, process, network에 접근하거나 이를 바꿀 수 있다. 비공개 임시
-작업 디렉터리와 새 환경변수 집합은 우발적인 노출을 줄일 뿐 그 접근을 막지 않는다.
-취소 뒤에도 runner의 독립 descendant가 남을 수 있다. 동의 전에 실행 파일과 정확한
-runner digest를 검토해야 한다. 상세 규약은 `docs/external-runner.md`에 있다.
-
-apply는 사람이 검토한 전체 digest를 요구한다. 이후 현재 Wiki, source hash, candidate
-lint, 검토한 byte를 다시 확인하고 승격과 audit 기록을 수행한다.
-
-기존 source·concept page의 비파괴 재생성, 비교, digest 승인 기반 승격 절차는
-`docs/wiki-rebuild.md`에 있다.
-
-명시적 source 추가는 신뢰된 integration이 소유한다. agent-safe tool은 source를 가져오거나
-외부 전달용 task를 만들거나 proposal을 apply할 수 없다. 경로 이탈, symbolic link, 오래된
-task, 알 수 없는 evidence ID, 과도하게 큰 artifact, 잘못된 교환 데이터는 거부한다.
-
-반복 사용할 코드는 `packages/*`에 둔다. 사람이 직접 실행해야 하는 흐름만 `apps/cli` 또는 `apps/service`에서 노출한다. provider SDK나 외부 runner 세부사항은 `packages/model-providers` 안에 격리한다.
-
-## 검증
-
-```bash
-pnpm check
-```
-
-`pnpm check`는 format, lint, dependency boundary, typecheck, test, build, docs check를 실행한다. 문서와 실제 script가 어긋나면 실패해야 한다.
-
-## 문서
-
-- `README.md`
-- `README.ko.md`
-- `docs/system-design.md`
-- `docs/development-guide.md`
-- `docs/testing-guide.md`
-- `docs/external-runner.md`
-- `docs/subscription-runner.md`
-- `docs/wiki-knowledge.md`
-- `docs/contribution-guide.md`
-- `docs/self-evolution-guide.md`
-- `docs/subbrain-design.md`
-- `AGENTS.md`
+SubBrain은 개인 데이터를 자동으로 수집하지 않는다.
